@@ -87,4 +87,4 @@ I write at [adeoti.substack.com](https://adeoti.substack.com). I think about the
 
 ---
 
-*Built May 2026. Open to feedback.*
+*Built May 2026. Update in progress.*
