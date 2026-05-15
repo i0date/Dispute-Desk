@@ -2,6 +2,8 @@
 
 An AI-powered tool for translating customer complaints into compliant Visa dispute summaries. Built from five years of fraud and risk operations experience at Canadian fintechs and banks.
 
+![Dispute Desk — Input view](./screenshot-1-input.png)
+
 ## What it does
 
 Paste in a raw customer complaint and the tool returns:
@@ -13,6 +15,16 @@ Paste in a raw customer complaint and the tool returns:
 - **Goodwill outreach flag** — surfaces when the cardholder is required to contact the merchant before a dispute can be filed
 - **Missing information list** — what's needed before filing
 - **Alternative codes** to consider
+
+## How it looks
+
+**Case intake with filing window check:**
+
+![Filled case intake](./screenshot-2-filled.png)
+
+**Generated analysis:**
+
+![Generated analysis output](./screenshot-3-output.png)
 
 ## Why I built this
 
@@ -40,6 +52,10 @@ Customer complaint  →  Claude (Sonnet 4)  →  Structured analysis  →  Opera
 
 No data is stored. Each analysis runs fresh.
 
+## Deployment note
+
+This component is designed to run inside Anthropic's Claude artifact environment, where API authentication is handled invisibly. To deploy independently, the API call would need to be proxied through a backend route with a stored API key — exposing an API key in client-side code is a security risk and not recommended for production use.
+
 ## Tech
 
 - React (single-file component)
@@ -63,7 +79,7 @@ No data is stored. Each analysis runs fresh.
 
 ## About me
 
-Adeoti Fashokun. Fraud, risk, and compliance professional based in Toronto. Five years across Canadian fintechs and banks. 
+Adeoti Fashokun. Fraud, risk, and compliance professional based in Toronto. Five years across Canadian fintechs and banks.
 
 I write at [adeoti.substack.com](https://adeoti.substack.com). I think about the intersection of financial crime, policy, and AI safety.
 
@@ -71,4 +87,4 @@ I write at [adeoti.substack.com](https://adeoti.substack.com). I think about the
 
 ---
 
-*Built May 2026. Update in progress.*
+*Built May 2026. Open to feedback.*
