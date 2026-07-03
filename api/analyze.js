@@ -1,4 +1,6 @@
-module.exports = async function handler(req, res) {
+const https = require('https')
+
+module.exports = function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' })
   }
@@ -9,21 +11,39 @@ module.exports = async function handler(req, res) {
   }
 
   try {
-    const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body
+    const payload = JSON.stringify(typeof req.body === 'string' ? JSON.parse(req.body) : req.body)
 
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
+    const options = {
+      hostname: 'api.anthropic.com',
+      path: '/v1/messages',
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(payload),
         'x-api-key': apiKey,
         'anthropic-version': '2023-06-01',
       },
-      body: JSON.stringify(body),
+    }
+
+    const apiReq = https.request(options, (apiRes) => {
+      let data = ''
+      apiRes.on('data', (chunk) => { data += chunk })
+      apiRes.on('end', () => {
+        try {
+          res.status(apiRes.statusCode).json(JSON.parse(data))
+        } catch (e) {
+          res.status(500).json({ error: 'Failed to parse Anthropic response' })
+        }
+      })
     })
 
-    const data = await response.json()
-    return res.status(response.status).json(data)
+    apiReq.on('error', (err) => {
+      res.status(500).json({ error: err.message })
+    })
+
+    apiReq.write(payload)
+    apiReq.end()
   } catch (err) {
-    return res.status(500).json({ error: err.message })
+    res.status(500).json({ error: err.message })
   }
 }
