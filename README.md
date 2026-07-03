@@ -97,4 +97,10 @@ Adeoti Fashokun. Fraud, risk, and compliance professional based in Toronto. Five
 
 ---
 
-*v2 — July 2026. Evidence package added.*
+## Version history
+
+**v1 — May 2026**
+Initial build. Single-file React component designed for Claude's artifact environment. Core features: reason code classification, dispute summary generation, filing window check, goodwill outreach flag, missing information list, alternative code suggestions.
+
+**v2 — July 2026**
+Rebuilt as a deployable Vite project with a Vercel serverless function proxying the Anthropic API (so the key never touches the browser). Added Step 03: Evidence Package — a reason-code-aware checklist that tells the analyst exactly what to pull from their systems, collect from the cardholder, and watch for from the merchant at representment. Evidence items are checkable in real time and tagged by impact on win probability.
