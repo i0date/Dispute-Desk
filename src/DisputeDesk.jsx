@@ -315,10 +315,10 @@ Return ONLY a valid JSON object:
         .section-divider { border-top: 1px solid #1A1814; margin: 32px 0 24px 0; }
       `}</style>
 
-      <div className="max-w-6xl mx-auto px-6 py-12">
+      <div className="max-w-6xl mx-auto px-4 py-8 sm:px-6 sm:py-12">
 
         {/* ── Masthead ── */}
-        <div className="border-b-2 border-black pb-8 mb-12">
+        <div className="border-b-2 border-black pb-6 mb-8 sm:pb-8 sm:mb-12">
           <div className="flex items-baseline justify-between mb-3 flex-wrap gap-2">
             <div className="mono-font text-xs tracking-widest text-stone-600">ISSUE Nº 002 — DISPUTE OPERATIONS</div>
             <div className="mono-font text-xs tracking-widest text-stone-600">
@@ -357,7 +357,7 @@ Return ONLY a valid JSON object:
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="input-label">Merchant</label>
                   <input type="text" value={merchant} onChange={e => setMerchant(e.target.value)} placeholder="e.g. Sephora" className="input-field" />
@@ -373,7 +373,7 @@ Return ONLY a valid JSON object:
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="input-label">Transaction Date</label>
                   <input type="date" value={transactionDate} onChange={e => setTransactionDate(e.target.value)} className="input-field mono-font" style={{ fontSize: '13px' }} />
