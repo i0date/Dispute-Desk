@@ -1,6 +1,6 @@
 # The Dispute Desk
 
-**[→ Live demo](https://dispute-desk-v2.vercel.app)**
+**[→ Live demo](https://dispute-desk-tau.vercel.app)**
 
 An AI-powered tool for translating customer complaints into compliant Visa dispute summaries — with a built-in evidence package for every case.
 
