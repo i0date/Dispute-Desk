@@ -1,15 +1,12 @@
 import React, { useState } from 'react'
-import { FileText, AlertCircle, Loader2, Copy, Check, ArrowRight, CheckSquare, Square } from 'lucide-react'
+import { FileText, AlertCircle, Loader2, Copy, Check, ArrowRight, CheckSquare, Square, Shield } from 'lucide-react'
 
 // ─── Evidence package by reason code ─────────────────────────────────────────
 
 function getEvidencePackage(code, category) {
-  const base = {
-    systems: [],
-    cardholder: [],
-    merchant: [],
-  }
+  const base = { systems: [], cardholder: [], merchant: [] }
 
+  // ── Visa Fraud (10.x) ──────────────────────────────────────────────────────
   if (category === 'fraud') {
     base.systems = [
       { text: '3DS authentication result (V.me / Cardinal / similar)', impact: 'strengthens' },
@@ -34,14 +31,13 @@ function getEvidencePackage(code, category) {
     }
   }
 
+  // ── Visa Consumer Dispute (13.x) ──────────────────────────────────────────
   if (category === 'consumer_dispute') {
-    // Common to all 13.x
     base.cardholder.push(
       { text: 'Proof of purchase — receipt, order confirmation, or invoice', impact: 'required' },
       { text: 'Record of goodwill outreach to merchant (email, chat log, support ticket, reference number)', impact: 'required' },
       { text: "Merchant's response (or documented non-response) to outreach", impact: 'required' },
     )
-
     if (code === '13.1') {
       base.cardholder.push(
         { text: 'Declaration of non-receipt signed by cardholder', impact: 'required' },
@@ -53,18 +49,14 @@ function getEvidencePackage(code, category) {
         { text: 'Signed delivery receipt or signature capture', impact: 'weakens' },
       )
     }
-
     if (code === '13.2') {
       base.cardholder.push(
         { text: 'Cancellation confirmation — email screenshot or reference number', impact: 'required' },
         { text: 'Timeline: date cancelled vs. date(s) of continued charges', impact: 'required' },
         { text: 'Proof that cancellation was processed (confirmation screen, email)', impact: 'strengthens' },
       )
-      base.merchant.push(
-        { text: 'Subscription terms and cancellation policy at time of signup', impact: 'context' },
-      )
+      base.merchant.push({ text: 'Subscription terms and cancellation policy at time of signup', impact: 'context' })
     }
-
     if (code === '13.3') {
       base.cardholder.push(
         { text: 'Photos of item as received', impact: 'required' },
@@ -73,7 +65,6 @@ function getEvidencePackage(code, category) {
         { text: 'Expert or third-party assessment if defect is technical', impact: 'strengthens' },
       )
     }
-
     if (code === '13.4') {
       base.cardholder.push(
         { text: 'Photos or documentation showing counterfeit indicators', impact: 'required' },
@@ -81,27 +72,22 @@ function getEvidencePackage(code, category) {
         { text: 'Expert authentication assessment if available', impact: 'strengthens' },
       )
     }
-
     if (code === '13.5') {
       base.cardholder.push(
         { text: 'Screenshots of merchant representation — listing, ad, website, email', impact: 'required' },
-        { text: 'Documentation of what was actually received or experienced vs. what was represented', impact: 'required' },
+        { text: 'Documentation of what was actually received vs. what was represented', impact: 'required' },
         { text: 'Contract or service agreement if applicable', impact: 'strengthens' },
         { text: 'Communications with merchant referencing the misrepresentation', impact: 'strengthens' },
       )
     }
-
     if (code === '13.6') {
       base.cardholder.push(
         { text: 'Return receipt or proof that credit was owed', impact: 'required' },
         { text: 'Credit authorization number if merchant provided one', impact: 'strengthens' },
         { text: 'Timeline: date return/refund was agreed to vs. statement showing no credit', impact: 'required' },
       )
-      base.merchant.push(
-        { text: 'Merchant acknowledgement of credit or refund in writing', impact: 'strengthens' },
-      )
+      base.merchant.push({ text: 'Merchant acknowledgement of credit or refund in writing', impact: 'strengthens' })
     }
-
     if (code === '13.7') {
       base.cardholder.push(
         { text: 'Cancellation confirmation — email, chat log, or reference number', impact: 'required' },
@@ -111,14 +97,83 @@ function getEvidencePackage(code, category) {
     }
   }
 
+  // ── Mastercard Fraud (48xx) ───────────────────────────────────────────────
+  if (category === 'mc_fraud') {
+    base.systems = [
+      { text: '3DS / SecureCode authentication result', impact: 'strengthens' },
+      { text: 'AVS and CVV2 match/mismatch log', impact: 'strengthens' },
+      { text: 'Device fingerprint and IP address at time of transaction', impact: 'strengthens' },
+      { text: 'Velocity check — same-day or same-merchant activity', impact: 'strengthens' },
+    ]
+    base.cardholder = [
+      { text: 'Signed non-authorization or fraud affidavit', impact: 'required' },
+      { text: 'Card possession status at time of transaction', impact: 'required' },
+    ]
+    if (code === '4870' || code === '4871') {
+      base.systems.push({ text: 'Terminal read method — confirm magnetic stripe used at chip-capable terminal', impact: 'required' })
+      base.cardholder.push({ text: 'Lost or stolen card report (police report if available)', impact: 'strengthens' })
+    }
+    if (code === '4837' || code === '4863') {
+      base.systems.push({ text: 'Confirmation that 3DS / SecureCode was not completed', impact: 'strengthens' })
+    }
+  }
+
+  // ── Mastercard Consumer Dispute (48xx) ────────────────────────────────────
+  if (category === 'mc_consumer_dispute') {
+    base.cardholder.push(
+      { text: 'Proof of purchase — receipt, order confirmation, or invoice', impact: 'required' },
+      { text: 'Record of goodwill outreach to merchant before filing', impact: 'required' },
+      { text: "Merchant's response (or documented non-response) to outreach", impact: 'required' },
+    )
+    if (code === '4853') {
+      base.cardholder.push(
+        { text: 'Photos of item as received', impact: 'required' },
+        { text: 'Screenshots of original merchant listing or advertisement', impact: 'required' },
+        { text: 'Return attempt documentation or merchant refusal to accept return', impact: 'strengthens' },
+      )
+    }
+    if (code === '4855' || code === '4859') {
+      base.cardholder.push(
+        { text: 'Declaration of non-receipt or non-delivery of service', impact: 'required' },
+        { text: 'Expected delivery or service date from merchant communication', impact: 'strengthens' },
+        { text: 'Any tracking or booking confirmation showing no fulfilment', impact: 'strengthens' },
+      )
+      base.merchant.push(
+        { text: 'Proof of delivery or service completion', impact: 'weakens' },
+        { text: 'Signed receipt or confirmation of service rendered', impact: 'weakens' },
+      )
+    }
+    if (code === '4860') {
+      base.cardholder.push(
+        { text: 'Return receipt or credit authorization from merchant', impact: 'required' },
+        { text: 'Timeline: date return accepted vs. statement showing no credit applied', impact: 'required' },
+      )
+    }
+    if (code === '4841') {
+      base.cardholder.push(
+        { text: 'Cancellation confirmation — email, reference number, or chat log', impact: 'required' },
+        { text: 'Timeline: date cancelled vs. date of continued charges', impact: 'required' },
+      )
+      base.merchant.push({ text: 'Subscription terms and cancellation policy at signup', impact: 'context' })
+    }
+  }
+
+  // ── Visa Processing Errors (12.x) ─────────────────────────────────────────
   if (category === 'processing_error') {
     base.systems.push(
       { text: 'Transaction record showing the error (duplicate, incorrect amount, etc.)', impact: 'required' },
       { text: 'Correct transaction or authorisation record for comparison', impact: 'required' },
     )
-    base.cardholder.push(
-      { text: 'Receipt or confirmation showing correct amount or single transaction', impact: 'strengthens' },
+    base.cardholder.push({ text: 'Receipt or confirmation showing correct amount or single transaction', impact: 'strengthens' })
+  }
+
+  // ── Mastercard Processing Errors (48xx) ──────────────────────────────────
+  if (category === 'mc_processing_error') {
+    base.systems.push(
+      { text: 'Transaction record showing the processing error', impact: 'required' },
+      { text: 'Correct authorisation or transaction record for comparison', impact: 'required' },
     )
+    base.cardholder.push({ text: 'Receipt or confirmation showing intended amount or single charge', impact: 'strengthens' })
   }
 
   return base
@@ -127,17 +182,21 @@ function getEvidencePackage(code, category) {
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export default function DisputeDesk() {
-  const [complaint, setComplaint]               = useState('')
-  const [merchant, setMerchant]                 = useState('')
-  const [amount, setAmount]                     = useState('')
-  const [transactionDate, setTransactionDate]   = useState('')
-  const [expectedDeliveryDate, setExpectedDeliveryDate] = useState('')
-  const [currency, setCurrency]                 = useState('CAD')
-  const [loading, setLoading]                   = useState(false)
-  const [result, setResult]                     = useState(null)
-  const [error, setError]                       = useState(null)
-  const [copied, setCopied]                     = useState(false)
-  const [checked, setChecked]                   = useState({})
+  const [network, setNetwork]                               = useState('visa')
+  const [complaint, setComplaint]                           = useState('')
+  const [merchant, setMerchant]                             = useState('')
+  const [amount, setAmount]                                 = useState('')
+  const [transactionDate, setTransactionDate]               = useState('')
+  const [expectedDeliveryDate, setExpectedDeliveryDate]     = useState('')
+  const [currency, setCurrency]                             = useState('CAD')
+  const [loading, setLoading]                               = useState(false)
+  const [result, setResult]                                 = useState(null)
+  const [error, setError]                                   = useState(null)
+  const [copied, setCopied]                                 = useState(false)
+  const [checked, setChecked]                               = useState({})
+  const [rebuttal, setRebuttal]                             = useState(null)
+  const [rebuttalLoading, setRebuttalLoading]               = useState(false)
+  const [rebuttalError, setRebuttalError]                   = useState(null)
 
   const toggleCheck = (key) => setChecked(prev => ({ ...prev, [key]: !prev[key] }))
 
@@ -165,26 +224,8 @@ export default function DisputeDesk() {
     return { status: 'ok', text: `${baseline} days elapsed — within 120-day filing window`, color: 'green' }
   }
 
-  const analyze = async () => {
-    if (!complaint.trim()) { setError('Customer complaint is required.'); return }
-    setLoading(true)
-    setError(null)
-    setResult(null)
-    setChecked({})
-
-    const prompt = `You are an experienced Visa dispute analyst. You write dispute summaries in a tight, operational voice: flowing prose, NO first-person pronouns (no "I"), warm but professional, concise. Real Float-style dispute summaries are typically 3-5 sentences, around 80-120 words. Avoid legal-brief language, avoid hedging, avoid repetition.
-
-Analyze this customer complaint and generate a structured dispute analysis.
-
-CUSTOMER COMPLAINT:
-"""${complaint}"""
-
-TRANSACTION DETAILS:
-- Merchant: ${merchant || 'Not provided'}
-- Amount: ${amount ? `${amount} ${currency}` : 'Not provided'}
-- Transaction Date: ${transactionDate || 'Not provided'}
-- Expected Delivery/Service Date: ${expectedDeliveryDate || 'Not provided'}
-
+  // ─── Visa reason codes prompt section ───────────────────────────────────────
+  const visaCodes = `
 Visa reason codes:
 
 FRAUD (Category 10):
@@ -218,27 +259,91 @@ CONSUMER DISPUTES (Category 13):
 - 13.6: Credit Not Processed
 - 13.7: Cancelled Merchandise/Services
 - 13.8: Original Credit Transaction Not Accepted
-- 13.9: Non-Receipt of Cash or Load Transaction Value
+- 13.9: Non-Receipt of Cash or Load Transaction Value`
+
+  const mastercardCodes = `
+Mastercard reason codes:
+
+FRAUD:
+- 4837: No Cardholder Authorization
+- 4840: Fraudulent Processing of Transactions
+- 4849: Questionable Merchant Activity
+- 4863: Cardholder Does Not Recognize — Potential Fraud
+- 4870: Chip Liability Shift
+- 4871: Chip/PIN Liability Shift
+
+AUTHORIZATION:
+- 4808: Authorization-Related Chargeback
+- 4812: Account Number Not On File
+- 4847: Required Authorization Not Obtained
+
+PROCESSING ERRORS:
+- 4831: Transaction Amount Differs
+- 4834: Point-of-Interaction Error
+- 4835: Card Not Valid or Expired
+- 4842: Late Presentment
+- 4846: Correct Transaction Currency Code Not Provided
+
+CONSUMER DISPUTES:
+- 4841: Cancelled Recurring or Digital Goods Transaction
+- 4850: Installment Billing Dispute
+- 4853: Cardholder Dispute — Defective / Not as Described
+- 4854: Cardholder Dispute — Not Elsewhere Classified
+- 4855: Goods or Services Not Provided
+- 4859: Services Not Rendered
+- 4860: Credit Not Processed
+- 4999: Domestic Chargeback Dispute (Region Use Only)`
+
+  const networkCodes = network === 'visa' ? visaCodes : mastercardCodes
+
+  const categoryMap = network === 'visa'
+    ? '"fraud" | "authorization" | "processing_error" | "consumer_dispute"'
+    : '"mc_fraud" | "mc_authorization" | "mc_processing_error" | "mc_consumer_dispute"'
+
+  // ─── Analyse ─────────────────────────────────────────────────────────────────
+  const analyze = async () => {
+    if (!complaint.trim()) { setError('Customer complaint is required.'); return }
+    setLoading(true)
+    setError(null)
+    setResult(null)
+    setRebuttal(null)
+    setChecked({})
+
+    const prompt = `You are an experienced ${network === 'visa' ? 'Visa' : 'Mastercard'} dispute analyst. You write dispute summaries in a tight, operational voice: flowing prose, NO first-person pronouns (no "I"), warm but professional, concise. Real dispute summaries are typically 3-5 sentences, around 80-120 words. Avoid legal-brief language, avoid hedging, avoid repetition.
+
+Analyze this customer complaint and generate a structured dispute analysis.
+
+CUSTOMER COMPLAINT:
+"""${complaint}"""
+
+TRANSACTION DETAILS:
+- Merchant: ${merchant || 'Not provided'}
+- Amount: ${amount ? `${amount} ${currency}` : 'Not provided'}
+- Transaction Date: ${transactionDate || 'Not provided'}
+- Expected Delivery/Service Date: ${expectedDeliveryDate || 'Not provided'}
+- Card Network: ${network === 'visa' ? 'Visa' : 'Mastercard'}
+
+${networkCodes}
 
 FORMATTING RULES:
-- For FRAUD codes (10.x): 2-3 sentences, ~50-70 words. State who, what, when, and that the cardholder did not authorize.
-- For CONSUMER DISPUTE codes (13.x): 3-5 sentences, ~80-120 words. Facts, what the cardholder tried, what the cardholder is requesting.
-- For PROCESSING ERROR codes (12.x): 2-4 sentences, ~60-90 words. State the error and the correct treatment.
+- For FRAUD codes: 2-3 sentences, ~50-70 words. State who, what, when, and that the cardholder did not authorize.
+- For CONSUMER DISPUTE codes: 3-5 sentences, ~80-120 words. Facts, what the cardholder tried, what the cardholder is requesting.
+- For PROCESSING ERROR codes: 2-4 sentences, ~60-90 words. State the error and the correct treatment.
 - NEVER use first-person pronouns.
 - Lead with facts. Save the ask for the final sentence.
 
 Return ONLY a valid JSON object:
 {
-  "recommended_reason_code": "13.5",
-  "reason_code_title": "Misrepresentation",
-  "category": "fraud" | "authorization" | "processing_error" | "consumer_dispute",
+  "recommended_reason_code": "${network === 'visa' ? '13.5' : '4853'}",
+  "reason_code_title": "Code title here",
+  "category": ${categoryMap},
   "confidence": "high" | "medium" | "low",
   "rationale": "1-2 sentences explaining why this reason code fits best.",
   "dispute_summary": "Tight operational dispute summary.",
   "missing_information": ["list", "of", "info", "needed"],
   "goodwill_outreach_required": true | false,
   "goodwill_outreach_note": "Brief note if required, otherwise empty string.",
-  "alternative_codes": [{"code": "13.1", "title": "Services Not Received", "when_to_use": "One line"}]
+  "alternative_codes": [{"code": "4855", "title": "Goods Not Provided", "when_to_use": "One line"}]
 }`
 
     try {
@@ -267,6 +372,70 @@ Return ONLY a valid JSON object:
     }
   }
 
+  // ─── Rebuttal simulator ───────────────────────────────────────────────────
+  const fetchRebuttal = async () => {
+    if (!result) return
+    setRebuttalLoading(true)
+    setRebuttalError(null)
+    setRebuttal(null)
+
+    const prompt = `You are a chargeback representment expert who has reviewed thousands of merchant rebuttals. Given this dispute, predict exactly what the merchant will argue at representment — and how the issuer should counter it.
+
+DISPUTE DETAILS:
+- Network: ${network === 'visa' ? 'Visa' : 'Mastercard'}
+- Reason Code: ${result.recommended_reason_code} — ${result.reason_code_title}
+- Merchant: ${merchant || 'Unknown'}
+- Amount: ${amount ? `${amount} ${currency}` : 'Unknown'}
+- Dispute Summary: ${result.dispute_summary}
+
+Be specific and realistic. Merchant arguments should reflect what this type of merchant actually argues for this reason code. Counter-strategy should be actionable for the issuing bank's dispute agent.
+
+Return ONLY valid JSON:
+{
+  "merchant_arguments": [
+    "Specific argument 1 the merchant will make",
+    "Specific argument 2",
+    "Specific argument 3"
+  ],
+  "merchant_evidence": [
+    "Evidence item 1 merchant will likely submit",
+    "Evidence item 2"
+  ],
+  "counter_strategy": [
+    "Actionable counter point 1 for the issuer",
+    "Actionable counter point 2"
+  ],
+  "win_risk": "LOW" | "MEDIUM" | "HIGH",
+  "win_risk_note": "One sentence on how strong the merchant defense is likely to be and why."
+}`
+
+    try {
+      const response = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-6',
+          max_tokens: 1000,
+          messages: [{ role: 'user', content: prompt }],
+        }),
+      })
+      if (!response.ok) throw new Error(`API error: ${response.status}`)
+      const data = await response.json()
+      const text = data.content
+        .filter(b => b.type === 'text')
+        .map(b => b.text)
+        .join('')
+        .replace(/```json|```/g, '')
+        .trim()
+      setRebuttal(JSON.parse(text))
+    } catch (e) {
+      setRebuttalError(`Rebuttal preview failed: ${e.message}`)
+    } finally {
+      setRebuttalLoading(false)
+    }
+  }
+
+  // ─── Copy summary ─────────────────────────────────────────────────────────
   const copySummary = () => {
     if (!result?.dispute_summary) return
     const formatted = `DISPUTE REASON CODE: ${result.recommended_reason_code} — ${result.reason_code_title}\n\n${result.dispute_summary}`
@@ -275,14 +444,14 @@ Return ONLY a valid JSON object:
     setTimeout(() => setCopied(false), 2000)
   }
 
-  const isFraud = result?.category === 'fraud'
+  const isFraud = result?.category === 'fraud' || result?.category === 'mc_fraud'
   const window  = filingWindowStatus(isFraud)
   const evidence = result ? getEvidencePackage(result.recommended_reason_code, result.category) : null
 
   const impactStyle = (impact) => {
-    if (impact === 'required')   return 'text-stone-900'
+    if (impact === 'required')    return 'text-stone-900'
     if (impact === 'strengthens') return 'text-emerald-800'
-    if (impact === 'weakens')    return 'text-red-800'
+    if (impact === 'weakens')     return 'text-red-800'
     return 'text-stone-700'
   }
 
@@ -294,6 +463,14 @@ Return ONLY a valid JSON object:
     return ''
   }
 
+  const winRiskColor = (risk) => {
+    if (risk === 'LOW')    return { bg: 'bg-emerald-900', text: 'text-emerald-50' }
+    if (risk === 'MEDIUM') return { bg: 'bg-amber-800',   text: 'text-amber-50'   }
+    if (risk === 'HIGH')   return { bg: 'bg-red-900',     text: 'text-red-50'     }
+    return { bg: 'bg-stone-700', text: 'text-stone-50' }
+  }
+
+  // ─── Render ───────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen" style={{ background: '#F5F1EA', fontFamily: 'Georgia, "Times New Roman", serif' }}>
       <style>{`
@@ -313,6 +490,15 @@ Return ONLY a valid JSON object:
           color: #6B5F4D; margin-bottom: 6px; display: block;
         }
         .section-divider { border-top: 1px solid #1A1814; margin: 32px 0 24px 0; }
+        .network-btn {
+          font-family: 'JetBrains Mono', monospace; font-size: 11px;
+          letter-spacing: 0.12em; padding: 10px 20px;
+          border: 1px solid #1A1814; cursor: pointer;
+          transition: all 0.15s ease; flex: 1; text-align: center;
+        }
+        .network-btn.active { background: #1A1814; color: #F5F1EA; }
+        .network-btn.inactive { background: #FAF7F1; color: #6B5F4D; }
+        .network-btn.inactive:hover { background: #F0EBE2; }
       `}</style>
 
       <div className="max-w-6xl mx-auto px-4 py-8 sm:px-6 sm:py-12">
@@ -320,7 +506,8 @@ Return ONLY a valid JSON object:
         {/* ── Masthead ── */}
         <div className="border-b-2 border-black pb-6 mb-8 sm:pb-8 sm:mb-12">
           <div className="flex items-baseline justify-between mb-3 flex-wrap gap-2">
-            <div className="mono-font text-xs tracking-widest text-stone-600">ISSUE Nº 002 — DISPUTE OPERATIONS</div>
+            <div className="mono-font text-xs tracking-widest text-stone-600 hidden sm:block">ISSUE Nº 002 — DISPUTE OPERATIONS</div>
+            <div className="mono-font text-xs tracking-widest text-stone-600 sm:hidden">DISPUTE OPERATIONS</div>
             <div className="mono-font text-xs tracking-widest text-stone-600">
               {new Date().toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' }).toUpperCase()}
             </div>
@@ -329,8 +516,8 @@ Return ONLY a valid JSON object:
             The Dispute<br />
             <span style={{ fontStyle: 'italic', fontWeight: 500 }}>Desk</span>
           </h1>
-          <p className="display-font text-stone-700 mt-4 max-w-2xl" style={{ fontSize: '17px', lineHeight: '1.5' }}>
-            An operational tool for translating customer complaints into compliant Visa dispute summaries — with a built-in evidence package for every case.
+          <p className="display-font text-stone-700 mt-4 max-w-2xl" style={{ fontSize: 'clamp(15px, 2vw, 17px)', lineHeight: '1.5' }}>
+            An operational tool for translating customer complaints into compliant dispute summaries — with a built-in evidence package and merchant defense preview for every case.
           </p>
         </div>
 
@@ -345,6 +532,26 @@ Return ONLY a valid JSON object:
             </div>
 
             <div className="space-y-5">
+
+              {/* Network selector */}
+              <div>
+                <label className="input-label">Card Network</label>
+                <div className="flex gap-0">
+                  <button
+                    onClick={() => setNetwork('visa')}
+                    className={`network-btn ${network === 'visa' ? 'active' : 'inactive'}`}
+                  >
+                    VISA
+                  </button>
+                  <button
+                    onClick={() => setNetwork('mastercard')}
+                    className={`network-btn ${network === 'mastercard' ? 'active' : 'inactive'}`}
+                  >
+                    MASTERCARD
+                  </button>
+                </div>
+              </div>
+
               <div>
                 <label className="input-label">Customer Complaint</label>
                 <textarea
@@ -435,6 +642,14 @@ Return ONLY a valid JSON object:
             {result && (
               <div className="space-y-6">
 
+                {/* Network badge */}
+                <div className="mono-font text-xs tracking-widest text-stone-500 flex items-center gap-2">
+                  <span className={`px-2 py-0.5 text-white ${network === 'visa' ? 'bg-blue-800' : 'bg-red-900'}`}>
+                    {network === 'visa' ? 'VISA' : 'MASTERCARD'}
+                  </span>
+                  <span>REASON CODE ANALYSIS</span>
+                </div>
+
                 {/* Reason code card */}
                 <div className="border-2 border-stone-900 bg-stone-50 p-6">
                   <div className="flex items-baseline justify-between mb-3 flex-wrap gap-2">
@@ -442,7 +657,7 @@ Return ONLY a valid JSON object:
                     <div className="flex gap-2 flex-wrap">
                       {result.category && (
                         <div className="mono-font text-xs px-2 py-1 bg-stone-200 text-stone-800">
-                          {result.category.replace('_', ' ').toUpperCase()}
+                          {result.category.replace('mc_', '').replace('_', ' ').toUpperCase()}
                         </div>
                       )}
                       <div className={`mono-font text-xs px-2 py-1 ${result.confidence === 'high' ? 'bg-emerald-900 text-emerald-50' : result.confidence === 'medium' ? 'bg-amber-900 text-amber-50' : 'bg-stone-700 text-stone-50'}`}>
@@ -460,7 +675,9 @@ Return ONLY a valid JSON object:
                 {/* Dispute summary */}
                 <div className="border border-stone-900 bg-white p-6">
                   <div className="flex items-baseline justify-between mb-4">
-                    <div className="mono-font text-xs tracking-widest text-stone-600">DISPUTE SUMMARY — READY FOR VISA</div>
+                    <div className="mono-font text-xs tracking-widest text-stone-600">
+                      DISPUTE SUMMARY — READY FOR {network === 'visa' ? 'VISA' : 'MASTERCARD'}
+                    </div>
                     <button onClick={copySummary} className="mono-font text-xs flex items-center gap-1.5 text-stone-700 hover:text-stone-900 transition-colors">
                       {copied ? <><Check className="w-3 h-3" /> COPIED</> : <><Copy className="w-3 h-3" /> COPY</>}
                     </button>
@@ -471,7 +688,7 @@ Return ONLY a valid JSON object:
                   {isFraud && (
                     <div className="mt-4 pt-4 border-t border-stone-200">
                       <p className="mono-font text-xs text-stone-500 italic">
-                        Note: for fraud disputes, liability shifts automatically. A brief summary is sufficient — Visa does not require extended narrative for category 10.x.
+                        Note: for fraud disputes, liability shifts automatically. A brief summary is sufficient — the network does not require extended narrative for fraud reason codes.
                       </p>
                     </div>
                   )}
@@ -537,7 +754,6 @@ Return ONLY a valid JSON object:
 
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
-                {/* Pull from systems */}
                 {evidence.systems.length > 0 && (
                   <div className="border border-stone-300 bg-stone-50 p-5">
                     <div className="mono-font text-xs tracking-widest text-stone-600 mb-4">PULL FROM YOUR SYSTEMS</div>
@@ -546,22 +762,11 @@ Return ONLY a valid JSON object:
                         const key = `sys-${i}`
                         const done = !!checked[key]
                         return (
-                          <button
-                            key={key}
-                            onClick={() => toggleCheck(key)}
-                            className="w-full text-left flex gap-2.5 items-start group"
-                          >
-                            {done
-                              ? <CheckSquare className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
-                              : <Square className="w-4 h-4 text-stone-400 shrink-0 mt-0.5 group-hover:text-stone-600" />
-                            }
+                          <button key={key} onClick={() => toggleCheck(key)} className="w-full text-left flex gap-2.5 items-start group">
+                            {done ? <CheckSquare className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" /> : <Square className="w-4 h-4 text-stone-400 shrink-0 mt-0.5 group-hover:text-stone-600" />}
                             <div>
-                              <span className={`display-font text-[14px] leading-snug ${done ? 'line-through text-stone-400' : impactStyle(item.impact)}`}>
-                                {item.text}
-                              </span>
-                              {!done && (
-                                <span className="mono-font text-[10px] text-stone-400 ml-1">{impactLabel(item.impact)}</span>
-                              )}
+                              <span className={`display-font text-[14px] leading-snug ${done ? 'line-through text-stone-400' : impactStyle(item.impact)}`}>{item.text}</span>
+                              {!done && <span className="mono-font text-[10px] text-stone-400 ml-1">{impactLabel(item.impact)}</span>}
                             </div>
                           </button>
                         )
@@ -570,7 +775,6 @@ Return ONLY a valid JSON object:
                   </div>
                 )}
 
-                {/* Collect from cardholder */}
                 {evidence.cardholder.length > 0 && (
                   <div className="border border-stone-300 bg-stone-50 p-5">
                     <div className="mono-font text-xs tracking-widest text-stone-600 mb-4">COLLECT FROM CARDHOLDER</div>
@@ -579,22 +783,11 @@ Return ONLY a valid JSON object:
                         const key = `ch-${i}`
                         const done = !!checked[key]
                         return (
-                          <button
-                            key={key}
-                            onClick={() => toggleCheck(key)}
-                            className="w-full text-left flex gap-2.5 items-start group"
-                          >
-                            {done
-                              ? <CheckSquare className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
-                              : <Square className="w-4 h-4 text-stone-400 shrink-0 mt-0.5 group-hover:text-stone-600" />
-                            }
+                          <button key={key} onClick={() => toggleCheck(key)} className="w-full text-left flex gap-2.5 items-start group">
+                            {done ? <CheckSquare className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" /> : <Square className="w-4 h-4 text-stone-400 shrink-0 mt-0.5 group-hover:text-stone-600" />}
                             <div>
-                              <span className={`display-font text-[14px] leading-snug ${done ? 'line-through text-stone-400' : impactStyle(item.impact)}`}>
-                                {item.text}
-                              </span>
-                              {!done && (
-                                <span className="mono-font text-[10px] text-stone-400 ml-1">{impactLabel(item.impact)}</span>
-                              )}
+                              <span className={`display-font text-[14px] leading-snug ${done ? 'line-through text-stone-400' : impactStyle(item.impact)}`}>{item.text}</span>
+                              {!done && <span className="mono-font text-[10px] text-stone-400 ml-1">{impactLabel(item.impact)}</span>}
                             </div>
                           </button>
                         )
@@ -603,7 +796,6 @@ Return ONLY a valid JSON object:
                   </div>
                 )}
 
-                {/* Watch for from merchant */}
                 {evidence.merchant.length > 0 && (
                   <div className="border border-stone-300 bg-stone-50 p-5">
                     <div className="mono-font text-xs tracking-widest text-stone-600 mb-4">WATCH FOR FROM MERCHANT</div>
@@ -613,22 +805,11 @@ Return ONLY a valid JSON object:
                         const key = `mer-${i}`
                         const done = !!checked[key]
                         return (
-                          <button
-                            key={key}
-                            onClick={() => toggleCheck(key)}
-                            className="w-full text-left flex gap-2.5 items-start group"
-                          >
-                            {done
-                              ? <CheckSquare className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
-                              : <Square className="w-4 h-4 text-stone-400 shrink-0 mt-0.5 group-hover:text-stone-600" />
-                            }
+                          <button key={key} onClick={() => toggleCheck(key)} className="w-full text-left flex gap-2.5 items-start group">
+                            {done ? <CheckSquare className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" /> : <Square className="w-4 h-4 text-stone-400 shrink-0 mt-0.5 group-hover:text-stone-600" />}
                             <div>
-                              <span className={`display-font text-[14px] leading-snug ${done ? 'line-through text-stone-400' : impactStyle(item.impact)}`}>
-                                {item.text}
-                              </span>
-                              {!done && (
-                                <span className="mono-font text-[10px] text-stone-400 ml-1">{impactLabel(item.impact)}</span>
-                              )}
+                              <span className={`display-font text-[14px] leading-snug ${done ? 'line-through text-stone-400' : impactStyle(item.impact)}`}>{item.text}</span>
+                              {!done && <span className="mono-font text-[10px] text-stone-400 ml-1">{impactLabel(item.impact)}</span>}
                             </div>
                           </button>
                         )
@@ -641,9 +822,107 @@ Return ONLY a valid JSON object:
           </>
         )}
 
+        {/* ── Step 04 — Merchant Defense Preview ── */}
+        {result && (
+          <>
+            <div className="section-divider" />
+            <div>
+              <div className="flex items-baseline gap-3 mb-2">
+                <span className="mono-font text-xs text-stone-500">04</span>
+                <h2 className="display-font font-semibold text-2xl text-stone-900" style={{ letterSpacing: '-0.01em' }}>Merchant Defense Preview</h2>
+              </div>
+              <p className="display-font text-stone-500 text-[15px] mb-6 ml-7" style={{ lineHeight: '1.5' }}>
+                Anticipate what the merchant will argue at representment — before they file it.
+              </p>
+
+              {!rebuttal && !rebuttalLoading && (
+                <button
+                  onClick={fetchRebuttal}
+                  className="flex items-center gap-3 px-6 py-4 bg-stone-900 text-stone-50 mono-font text-xs tracking-widest hover:bg-stone-800 transition-all group"
+                >
+                  <Shield className="w-4 h-4" />
+                  <span>GENERATE MERCHANT DEFENSE PREVIEW</span>
+                  <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+                </button>
+              )}
+
+              {rebuttalLoading && (
+                <div className="border border-stone-300 p-8 bg-stone-50 flex items-center gap-3">
+                  <Loader2 className="w-5 h-5 text-stone-600 animate-spin shrink-0" />
+                  <p className="display-font text-stone-600 italic">Modelling merchant representment strategy…</p>
+                </div>
+              )}
+
+              {rebuttalError && (
+                <div className="border border-red-700 bg-red-50 p-4 flex gap-3 items-start">
+                  <AlertCircle className="w-5 h-5 text-red-700 shrink-0 mt-0.5" />
+                  <div className="display-font text-sm text-red-900">{rebuttalError}</div>
+                </div>
+              )}
+
+              {rebuttal && (
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+                  {/* Merchant arguments */}
+                  <div className="border-2 border-stone-900 bg-stone-50 p-5">
+                    <div className="mono-font text-xs tracking-widest text-stone-600 mb-4">MERCHANT WILL ARGUE</div>
+                    <div className="space-y-3">
+                      {rebuttal.merchant_arguments?.map((arg, i) => (
+                        <div key={i} className="display-font text-stone-800 text-[14px] flex gap-2 items-start leading-snug">
+                          <span className="text-stone-400 shrink-0 mt-0.5">→</span>
+                          <span>{arg}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Merchant evidence */}
+                  <div className="border border-stone-300 bg-stone-50 p-5">
+                    <div className="mono-font text-xs tracking-widest text-stone-600 mb-4">EVIDENCE THEY'LL SUBMIT</div>
+                    <div className="space-y-3">
+                      {rebuttal.merchant_evidence?.map((ev, i) => (
+                        <div key={i} className="display-font text-red-900 text-[14px] flex gap-2 items-start leading-snug">
+                          <span className="text-red-400 shrink-0 mt-0.5">⚠</span>
+                          <span>{ev}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Counter strategy */}
+                  <div className="border border-stone-300 bg-stone-50 p-5">
+                    <div className="mono-font text-xs tracking-widest text-stone-600 mb-4">HOW TO COUNTER</div>
+                    <div className="space-y-3">
+                      {rebuttal.counter_strategy?.map((pt, i) => (
+                        <div key={i} className="display-font text-emerald-800 text-[14px] flex gap-2 items-start leading-snug">
+                          <span className="text-emerald-600 shrink-0 mt-0.5">✓</span>
+                          <span>{pt}</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    {rebuttal.win_risk && (
+                      <div className="mt-5 pt-4 border-t border-stone-200">
+                        <div className="mono-font text-xs tracking-widest text-stone-500 mb-2">MERCHANT DEFENSE STRENGTH</div>
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className={`mono-font text-xs px-2 py-0.5 ${winRiskColor(rebuttal.win_risk).bg} ${winRiskColor(rebuttal.win_risk).text}`}>
+                            {rebuttal.win_risk} RISK
+                          </span>
+                        </div>
+                        <p className="display-font text-stone-600 text-[13px] italic leading-snug">{rebuttal.win_risk_note}</p>
+                      </div>
+                    )}
+                  </div>
+
+                </div>
+              )}
+            </div>
+          </>
+        )}
+
         {/* ── Footer ── */}
         <div className="section-divider" />
-        <div className="flex items-baseline justify-between text-stone-600 flex-wrap gap-2">
+        <div className="flex flex-col sm:flex-row sm:items-baseline justify-between text-stone-600 gap-2">
           <div className="mono-font text-xs tracking-widest">BUILT BY ADEOTI FASHOKUN — RISK &amp; TRUST OPERATIONS</div>
           <div className="display-font italic text-sm">"Disputes resolve faster when the framework is written down."</div>
         </div>
