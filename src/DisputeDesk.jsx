@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { FileText, AlertCircle, Loader2, Copy, Check, ArrowRight, CheckSquare, Square, Shield } from 'lucide-react'
+import { FileText, AlertCircle, Loader2, Copy, Check, ArrowRight, CheckSquare, Square, Shield, MessageSquare } from 'lucide-react'
 
 // ─── Evidence package by reason code ─────────────────────────────────────────
 
@@ -197,6 +197,10 @@ export default function DisputeDesk() {
   const [rebuttal, setRebuttal]                             = useState(null)
   const [rebuttalLoading, setRebuttalLoading]               = useState(false)
   const [rebuttalError, setRebuttalError]                   = useState(null)
+  const [comms, setComms]                                   = useState(null)
+  const [commsLoading, setCommsLoading]                     = useState(false)
+  const [commsError, setCommsError]                         = useState(null)
+  const [commsCopied, setCommsCopied]                       = useState(false)
 
   const toggleCheck = (key) => setChecked(prev => ({ ...prev, [key]: !prev[key] }))
 
@@ -307,6 +311,7 @@ CONSUMER DISPUTES:
     setError(null)
     setResult(null)
     setRebuttal(null)
+    setComms(null)
     setChecked({})
 
     const prompt = `You are an experienced ${network === 'visa' ? 'Visa' : 'Mastercard'} dispute analyst. You write dispute summaries in a tight, operational voice: flowing prose, NO first-person pronouns (no "I"), warm but professional, concise. Real dispute summaries are typically 3-5 sentences, around 80-120 words. Avoid legal-brief language, avoid hedging, avoid repetition.
@@ -435,6 +440,86 @@ Return ONLY valid JSON:
     }
   }
 
+  // ─── Customer communication ───────────────────────────────────────────────
+  const fetchComms = async () => {
+    if (!result) return
+    setCommsLoading(true)
+    setCommsError(null)
+    setComms(null)
+
+    const outcomeContext = (result.category === 'fraud' || result.category === 'mc_fraud')
+      ? 'This is a confirmed fraud dispute. The cardholder did not authorize the transaction.'
+      : result.goodwill_outreach_required
+      ? 'This is a consumer dispute. Goodwill outreach to the merchant is required before filing.'
+      : 'This is a consumer dispute being filed on behalf of the cardholder.'
+
+    const prompt = `You are a customer communications specialist at an issuing bank. Write a professional, clear cardholder letter based on this dispute analysis.
+
+DISPUTE DETAILS:
+- Network: ${network === 'visa' ? 'Visa' : 'Mastercard'}
+- Reason Code: ${result.recommended_reason_code} — ${result.reason_code_title}
+- Merchant: ${merchant || 'Unknown'}
+- Amount: ${amount ? `${amount} ${currency}` : 'Unknown'}
+- Dispute Summary: ${result.dispute_summary}
+- Context: ${outcomeContext}
+- Goodwill outreach required: ${result.goodwill_outreach_required ? 'Yes — ' + result.goodwill_outreach_note : 'No'}
+- Original complaint: "${complaint}"
+
+SELECT THE CORRECT OUTCOME:
+- FILING: dispute qualifies and the bank will file on the cardholder's behalf
+- NOT_FILING: claim doesn't meet threshold or shows first-party indicators (e.g. pattern of prior disputes, transaction matches cardholder behaviour) — firm but professional, never accuse directly
+- DECLINED_TXN: the transaction was already declined/reversed and there is no net loss to recover — explain this clearly so the customer understands
+- INVESTIGATION: requires further information or review before a decision
+
+CARD ACTION:
+- CANCEL_RECOMMENDED: fraud confirmed or card may be compromised — advise cancellation and reissue
+- MONITOR: suspicious activity but card status unclear
+- NONE: no card action needed
+
+WRITING RULES:
+- Bank voice ("we" / "our")
+- Empathetic for genuine fraud victims; firm but respectful if not filing
+- Never accuse of fraud directly
+- No legal jargon
+- 3–4 short paragraphs in the body
+- Do NOT include salutation or sign-off in the body field — those are injected separately
+
+Return ONLY valid JSON:
+{
+  "outcome": "FILING" | "NOT_FILING" | "DECLINED_TXN" | "INVESTIGATION",
+  "card_action": "CANCEL_RECOMMENDED" | "MONITOR" | "NONE",
+  "subject": "Re: Your [brief description] — [merchant]",
+  "body": "Letter body only. Separate paragraphs with \\n\\n.",
+  "next_steps": ["Step 1", "Step 2", "Step 3"],
+  "timeline": "e.g. 5–10 business days from the date of this letter"
+}`
+
+    try {
+      const response = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-6',
+          max_tokens: 1200,
+          messages: [{ role: 'user', content: prompt }],
+        }),
+      })
+      if (!response.ok) throw new Error(`API error: ${response.status}`)
+      const data = await response.json()
+      const text = data.content
+        .filter(b => b.type === 'text')
+        .map(b => b.text)
+        .join('')
+        .replace(/```json|```/g, '')
+        .trim()
+      setComms(JSON.parse(text))
+    } catch (e) {
+      setCommsError(`Communication draft failed: ${e.message}`)
+    } finally {
+      setCommsLoading(false)
+    }
+  }
+
   // ─── Copy summary ─────────────────────────────────────────────────────────
   const copySummary = () => {
     if (!result?.dispute_summary) return
@@ -442,6 +527,21 @@ Return ONLY valid JSON:
     navigator.clipboard.writeText(formatted)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
+  }
+
+  const commsOutcomeMap = {
+    FILING:        { bg: 'bg-emerald-900', text: 'text-emerald-50', label: 'FILING DISPUTE'      },
+    NOT_FILING:    { bg: 'bg-red-900',     text: 'text-red-50',     label: 'NOT FILING'          },
+    DECLINED_TXN:  { bg: 'bg-stone-700',   text: 'text-stone-50',   label: 'TXN DECLINED'        },
+    INVESTIGATION: { bg: 'bg-amber-800',   text: 'text-amber-50',   label: 'UNDER INVESTIGATION' },
+  }
+  const commsOc = comms ? (commsOutcomeMap[comms.outcome] || commsOutcomeMap.INVESTIGATION) : null
+  const copyCommsLetter = () => {
+    if (!comms) return
+    const full = `Subject: ${comms.subject}\n\nDear Valued Cardholder,\n\n${comms.body}\n\nNext Steps:\n${comms.next_steps?.map(s => `• ${s}`).join('\n')}\n\nExpected timeline: ${comms.timeline}\n\nSincerely,\nCustomer Care Team`
+    navigator.clipboard.writeText(full)
+    setCommsCopied(true)
+    setTimeout(() => setCommsCopied(false), 2000)
   }
 
   const isFraud = result?.category === 'fraud' || result?.category === 'mc_fraud'
@@ -823,7 +923,7 @@ Return ONLY valid JSON:
         )}
 
         {/* ── Step 04 — Merchant Defense Preview ── */}
-        {result && (
+        {(
           <>
             <div className="section-divider" />
             <div>
@@ -835,7 +935,13 @@ Return ONLY valid JSON:
                 Anticipate what the merchant will argue at representment — before they file it.
               </p>
 
-              {!rebuttal && !rebuttalLoading && (
+              {!result && (
+                <div className="border border-dashed border-stone-300 p-10 text-center" style={{ background: '#FAF7F1' }}>
+                  <Shield className="w-7 h-7 text-stone-300 mx-auto mb-3" />
+                  <p className="display-font text-stone-400 italic text-[14px]">Run an analysis first to generate the merchant defense preview.</p>
+                </div>
+              )}
+              {result && !rebuttal && !rebuttalLoading && (
                 <button
                   onClick={fetchRebuttal}
                   className="flex items-center gap-3 px-6 py-4 bg-stone-900 text-stone-50 mono-font text-xs tracking-widest hover:bg-stone-800 transition-all group"
@@ -912,6 +1018,113 @@ Return ONLY valid JSON:
                         <p className="display-font text-stone-600 text-[13px] italic leading-snug">{rebuttal.win_risk_note}</p>
                       </div>
                     )}
+                  </div>
+
+                </div>
+              )}
+            </div>
+          </>
+        )}
+
+        {/* ── Step 05 — Customer Communication ── */}
+        {(
+          <>
+            <div className="section-divider" />
+            <div>
+              <div className="flex items-baseline gap-3 mb-2">
+                <span className="mono-font text-xs text-stone-500">05</span>
+                <h2 className="display-font font-semibold text-2xl text-stone-900" style={{ letterSpacing: '-0.01em' }}>Customer Communication</h2>
+              </div>
+              <p className="display-font text-stone-500 text-[15px] mb-6 ml-7" style={{ lineHeight: '1.5' }}>
+                Draft the cardholder letter based on desk findings — filing, not filing, declined transaction, or investigation.
+              </p>
+
+              {!result && (
+                <div className="border border-dashed border-stone-300 p-10 text-center" style={{ background: '#FAF7F1' }}>
+                  <MessageSquare className="w-7 h-7 text-stone-300 mx-auto mb-3" />
+                  <p className="display-font text-stone-400 italic text-[14px]">Run an analysis first to generate the customer communication draft.</p>
+                </div>
+              )}
+              {result && !comms && !commsLoading && (
+                <button
+                  onClick={fetchComms}
+                  className="flex items-center gap-3 px-6 py-4 bg-stone-900 text-stone-50 mono-font text-xs tracking-widest hover:bg-stone-800 transition-all group"
+                >
+                  <MessageSquare className="w-4 h-4" />
+                  <span>GENERATE CUSTOMER LETTER</span>
+                  <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+                </button>
+              )}
+
+              {commsLoading && (
+                <div className="border border-stone-300 p-8 bg-stone-50 flex items-center gap-3">
+                  <Loader2 className="w-5 h-5 text-stone-600 animate-spin shrink-0" />
+                  <p className="display-font text-stone-600 italic">Drafting customer communication…</p>
+                </div>
+              )}
+
+              {commsError && (
+                <div className="border border-red-700 bg-red-50 p-4 flex gap-3 items-start">
+                  <AlertCircle className="w-5 h-5 text-red-700 shrink-0 mt-0.5" />
+                  <div className="display-font text-sm text-red-900">{commsError}</div>
+                </div>
+              )}
+
+              {comms && commsOc && (
+                <div className="border border-stone-900">
+
+                  {/* Letter header */}
+                  <div className="bg-stone-900 p-4 flex items-start justify-between flex-wrap gap-3">
+                    <div>
+                      <div className="mono-font text-xs tracking-widest text-stone-400 mb-1">SUBJECT</div>
+                      <div className="display-font text-stone-100 font-semibold">{comms.subject}</div>
+                    </div>
+                    <div className="flex gap-2 flex-wrap">
+                      <span className={`mono-font text-xs px-2 py-1 ${commsOc.bg} ${commsOc.text}`}>{commsOc.label}</span>
+                      {comms.card_action === 'CANCEL_RECOMMENDED' && (
+                        <span className="mono-font text-xs px-2 py-1 bg-red-700 text-red-50">CANCEL CARD</span>
+                      )}
+                      {comms.card_action === 'MONITOR' && (
+                        <span className="mono-font text-xs px-2 py-1 bg-amber-800 text-amber-50">MONITOR CARD</span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Letter body */}
+                  <div className="bg-white p-6 space-y-4 border-b border-stone-200">
+                    <p className="display-font text-stone-600 text-[14px] italic">Dear Valued Cardholder,</p>
+                    {comms.body?.split('\n\n').map((para, i) => (
+                      <p key={i} className="display-font text-stone-900 text-[15px] leading-relaxed">{para}</p>
+                    ))}
+                    <p className="display-font text-stone-600 text-[14px] italic pt-2">
+                      Sincerely,<br />Customer Care Team
+                    </p>
+                  </div>
+
+                  {/* Next steps + timeline */}
+                  <div className="bg-stone-50 p-5 grid grid-cols-1 sm:grid-cols-2 gap-6 border-b border-stone-200">
+                    <div>
+                      <div className="mono-font text-xs tracking-widest text-stone-500 mb-3">NEXT STEPS FOR CARDHOLDER</div>
+                      <div className="space-y-2">
+                        {comms.next_steps?.map((step, i) => (
+                          <div key={i} className="display-font text-stone-800 text-[14px] flex gap-2 items-start">
+                            <span className="text-stone-400 shrink-0 mt-0.5">→</span>
+                            <span>{step}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="mono-font text-xs tracking-widest text-stone-500 mb-3">EXPECTED TIMELINE</div>
+                      <div className="display-font text-stone-800 text-[15px]">{comms.timeline}</div>
+                    </div>
+                  </div>
+
+                  {/* Copy */}
+                  <div className="p-4 flex justify-end bg-stone-50">
+                    <button onClick={copyCommsLetter} className="mono-font text-xs flex items-center gap-1.5 text-stone-700 hover:text-stone-900 transition-colors">
+                      {commsCopied ? <><Check className="w-3 h-3" /> COPIED</> : <><Copy className="w-3 h-3" /> COPY LETTER</>}
+                    </button>
                   </div>
 
                 </div>
