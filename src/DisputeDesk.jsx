@@ -840,7 +840,7 @@ Return ONLY valid JSON:
         </div>
 
         {/* ── Step 03 — Evidence Package ── */}
-        {evidence && (
+        {(
           <>
             <div className="section-divider" />
             <div>
@@ -852,7 +852,14 @@ Return ONLY valid JSON:
                 Evidence checklist for <span className="font-semibold text-stone-700">{result.recommended_reason_code} — {result.reason_code_title}</span>. Check items off as you collect them.
               </p>
 
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              {!evidence && (
+                <div className="border border-dashed border-stone-300 p-10 text-center" style={{ background: '#FAF7F1' }}>
+                  <FileText className="w-7 h-7 text-stone-300 mx-auto mb-3" />
+                  <p className="display-font text-stone-400 italic text-[14px]">Run an analysis first to generate the evidence package.</p>
+                </div>
+              )}
+
+              {evidence && <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
                 {evidence.systems.length > 0 && (
                   <div className="border border-stone-300 bg-stone-50 p-5">
@@ -917,7 +924,7 @@ Return ONLY valid JSON:
                     </div>
                   </div>
                 )}
-              </div>
+              </div>}
             </div>
           </>
         )}
