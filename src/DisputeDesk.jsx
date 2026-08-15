@@ -1,5 +1,5 @@
-import React, { useState } from 'react'
-import { FileText, AlertCircle, Loader2, Copy, Check, ArrowRight, CheckSquare, Square, Shield, MessageSquare } from 'lucide-react'
+import React, { useState, useEffect } from 'react'
+import { FileText, AlertCircle, Loader2, Copy, Check, ArrowRight, CheckSquare, Square, Shield, MessageSquare, ClipboardList, Download } from 'lucide-react'
 
 // ─── Evidence package by reason code ─────────────────────────────────────────
 
@@ -201,6 +201,15 @@ export default function DisputeDesk() {
   const [commsLoading, setCommsLoading]                     = useState(false)
   const [commsError, setCommsError]                         = useState(null)
   const [commsCopied, setCommsCopied]                       = useState(false)
+  const [docRequestCopied, setDocRequestCopied]             = useState(false)
+
+  // ── Outcome tracking (60-day dispute log) ─────────────────────────────────
+  const [outcomes, setOutcomes] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('dispute_desk_outcomes') || '[]') } catch { return [] }
+  })
+  useEffect(() => {
+    localStorage.setItem('dispute_desk_outcomes', JSON.stringify(outcomes))
+  }, [outcomes])
 
   const toggleCheck = (key) => setChecked(prev => ({ ...prev, [key]: !prev[key] }))
 
@@ -369,7 +378,20 @@ Return ONLY a valid JSON object:
         .join('')
         .replace(/```json|```/g, '')
         .trim()
-      setResult(JSON.parse(text))
+      const parsed = JSON.parse(text)
+      setResult(parsed)
+      // Save to outcome log
+      setOutcomes(prev => [{
+        id: `DD-${Date.now().toString(36).toUpperCase().slice(-5)}`,
+        date: new Date().toISOString(),
+        merchant: merchant || '—',
+        amount: amount ? `${amount} ${currency}` : '—',
+        network: network === 'visa' ? 'VISA' : 'MC',
+        reasonCode: parsed.recommended_reason_code,
+        reasonTitle: parsed.reason_code_title,
+        status: 'pending',
+        resolvedDate: null,
+      }, ...prev])
     } catch (e) {
       setError(`Analysis failed: ${e.message}`)
     } finally {
@@ -544,9 +566,65 @@ Return ONLY valid JSON:
     setTimeout(() => setCommsCopied(false), 2000)
   }
 
-  const isFraud = result?.category === 'fraud' || result?.category === 'mc_fraud'
-  const window  = filingWindowStatus(isFraud)
-  const evidence = result ? getEvidencePackage(result.recommended_reason_code, result.category) : null
+  // ── Copy customer document request ─────────────────────────────────────────
+  const copyDocRequest = () => {
+    if (!result || !evidence) return
+    const items = evidence.cardholder.map((item, i) => `${i + 1}. ${item.text}`).join('\n')
+    const missingSection = result.missing_information?.length > 0
+      ? `\n\nAdditionally, please provide or clarify:\n${result.missing_information.map((m, i) => `${i + 1}. ${m}`).join('\n')}`
+      : ''
+    const deadlineNote = filingWindow && filingWindow.status !== 'ok'
+      ? `\n\n⚠ FILING DEADLINE: ${filingWindow.text}. Please respond promptly to avoid missing the dispute window.`
+      : ''
+    const full = `Subject: Supporting Documents Required — Dispute Ref. ${result.recommended_reason_code}\n\nDear Valued Cardholder,\n\nThank you for contacting us regarding your dispute for ${amount ? `${amount} ${currency}` : 'the disputed amount'} at ${merchant || 'the merchant listed above'}.\n\nTo proceed with your case under Reason Code ${result.recommended_reason_code} — ${result.reason_code_title}, we require the following documents within 10 business days of this notice:\n\n${items}${missingSection}${deadlineNote}\n\nPlease submit your documents via our secure portal, by email reply, or at your nearest branch. Incomplete submissions may delay resolution of your case.\n\nThank you for your cooperation.\n\nSincerely,\nDispute Resolution Team`
+    navigator.clipboard.writeText(full)
+    setDocRequestCopied(true)
+    setTimeout(() => setDocRequestCopied(false), 2000)
+  }
+
+  // ── Outcome tracker helpers ────────────────────────────────────────────────
+  const markCaseOutcome = (id, status) =>
+    setOutcomes(prev => prev.map(o => o.id === id ? { ...o, status, resolvedDate: new Date().toISOString() } : o))
+
+  const exportCSV = () => {
+    const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000)
+    const rows = outcomes.filter(o => new Date(o.date) > sixtyDaysAgo)
+    const headers = ['Case ID', 'Date Opened', 'Merchant', 'Amount', 'Network', 'Reason Code', 'Status', 'Resolved Date']
+    const csv = [
+      headers.join(','),
+      ...rows.map(o => [
+        o.id,
+        new Date(o.date).toLocaleDateString('en-CA'),
+        `"${o.merchant}"`,
+        `"${o.amount}"`,
+        o.network,
+        `"${o.reasonCode} — ${o.reasonTitle}"`,
+        o.status,
+        o.resolvedDate ? new Date(o.resolvedDate).toLocaleDateString('en-CA') : ''
+      ].join(','))
+    ].join('\n')
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `dispute-desk-${new Date().toISOString().split('T')[0]}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const isFraud     = result?.category === 'fraud' || result?.category === 'mc_fraud'
+  const filingWindow = filingWindowStatus(isFraud)
+  const evidence    = result ? getEvidencePackage(result.recommended_reason_code, result.category) : null
+  const smallDollar = amount && parseFloat(amount) > 0 && parseFloat(amount) < 50
+
+  // Outcome tracker: 60-day window only
+  const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000)
+  const visibleOutcomes = outcomes.filter(o => new Date(o.date) > sixtyDaysAgo)
+  const wonCount        = visibleOutcomes.filter(o => o.status === 'won').length
+  const lostCount       = visibleOutcomes.filter(o => o.status === 'lost').length
+  const withdrawnCount  = visibleOutcomes.filter(o => o.status === 'withdrawn').length
+  const resolvedCount   = wonCount + lostCount + withdrawnCount
+  const winRate         = resolvedCount > 0 ? Math.round((wonCount / resolvedCount) * 100) : null
 
   const impactStyle = (impact) => {
     if (impact === 'required')    return 'text-stone-900'
@@ -691,10 +769,19 @@ Return ONLY valid JSON:
                 </div>
               </div>
 
-              {window && (
-                <div className={`p-4 border ${window.color === 'red' ? 'border-red-700 bg-red-50' : window.color === 'amber' ? 'border-amber-700 bg-amber-50' : 'border-emerald-700 bg-emerald-50'}`}>
+              {smallDollar && (
+                <div className="border border-stone-400 bg-stone-50 p-4">
+                  <div className="mono-font text-xs tracking-widest text-stone-500 mb-1">⚠ SMALL DOLLAR — CONSIDER WRITE-OFF</div>
+                  <p className="display-font text-stone-700 text-[14px] leading-relaxed">
+                    At {amount} {currency}, staff time and network fees may exceed recovery. Consider a direct goodwill credit before filing a formal dispute.
+                  </p>
+                </div>
+              )}
+
+              {filingWindow && (
+                <div className={`p-4 border ${filingWindow.color === 'red' ? 'border-red-700 bg-red-50' : filingWindow.color === 'amber' ? 'border-amber-700 bg-amber-50' : 'border-emerald-700 bg-emerald-50'}`}>
                   <div className="mono-font text-xs tracking-widest mb-1 text-stone-700">FILING WINDOW</div>
-                  <div className="display-font text-sm text-stone-900">{window.text}</div>
+                  <div className="display-font text-sm text-stone-900">{filingWindow.text}</div>
                 </div>
               )}
 
@@ -1136,6 +1223,204 @@ Return ONLY valid JSON:
 
                 </div>
               )}
+            </div>
+          </>
+        )}
+
+        {/* ── Step 06 — Customer Document Request ── */}
+        {(
+          <>
+            <div className="section-divider" />
+            <div>
+              <div className="flex items-baseline gap-3 mb-2">
+                <span className="mono-font text-xs text-stone-500">06</span>
+                <h2 className="display-font font-semibold text-2xl text-stone-900" style={{ letterSpacing: '-0.01em' }}>Customer Document Request</h2>
+              </div>
+              <p className="display-font text-stone-500 text-[15px] mb-6 ml-7" style={{ lineHeight: '1.5' }}>
+                A ready-to-send document request for the cardholder — listing exactly what to submit, specific to this reason code.
+              </p>
+
+              {!result && (
+                <div className="border border-dashed border-stone-300 p-10 text-center" style={{ background: '#FAF7F1' }}>
+                  <ClipboardList className="w-7 h-7 text-stone-300 mx-auto mb-3" />
+                  <p className="display-font text-stone-400 italic text-[14px]">Run an analysis first to generate the customer document request.</p>
+                </div>
+              )}
+
+              {result && evidence && (
+                <div className="border border-stone-900">
+                  {/* Header */}
+                  <div className="bg-stone-900 p-4 flex items-start justify-between flex-wrap gap-3">
+                    <div>
+                      <div className="mono-font text-xs tracking-widest text-stone-400 mb-1">SUBJECT</div>
+                      <div className="display-font text-stone-100 font-semibold">
+                        Supporting Documents Required — Dispute Ref. {result.recommended_reason_code}
+                      </div>
+                    </div>
+                    {filingWindow && filingWindow.status !== 'ok' && (
+                      <span className={`mono-font text-xs px-2 py-1 ${filingWindow.color === 'red' ? 'bg-red-700 text-red-50' : 'bg-amber-700 text-amber-50'}`}>
+                        {filingWindow.color === 'red' ? 'DEADLINE CRITICAL' : 'DEADLINE APPROACHING'}
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Body */}
+                  <div className="bg-white p-6 space-y-5 border-b border-stone-200">
+                    <p className="display-font text-stone-600 text-[14px] italic">Dear Valued Cardholder,</p>
+                    <p className="display-font text-stone-900 text-[15px] leading-relaxed">
+                      Thank you for contacting us regarding your dispute for{' '}
+                      <strong>{amount ? `${amount} ${currency}` : 'the disputed transaction'}</strong>{' '}
+                      at <strong>{merchant || 'the merchant listed above'}</strong>.
+                      To proceed with your case under Reason Code{' '}
+                      <strong>{result.recommended_reason_code} — {result.reason_code_title}</strong>,
+                      we require the following documents within <strong>10 business days</strong> of this notice:
+                    </p>
+
+                    {/* Required documents */}
+                    <div className="space-y-2 pl-2">
+                      {evidence.cardholder.map((item, i) => (
+                        <div key={i} className="display-font text-stone-800 text-[15px] flex gap-3 items-start leading-snug">
+                          <span className="mono-font text-xs text-stone-400 shrink-0 mt-0.5">{String(i + 1).padStart(2, '0')}</span>
+                          <div>
+                            <span>{item.text}</span>
+                            {item.impact === 'required' && (
+                              <span className="mono-font text-[9px] text-red-700 ml-2 tracking-wider">REQUIRED</span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Missing info */}
+                    {result.missing_information?.length > 0 && (
+                      <div className="border-t border-stone-100 pt-5">
+                        <p className="display-font text-stone-900 text-[15px] leading-relaxed mb-3">
+                          Additionally, please provide or clarify the following:
+                        </p>
+                        <div className="space-y-2 pl-2">
+                          {result.missing_information.map((m, i) => (
+                            <div key={i} className="display-font text-stone-700 text-[15px] flex gap-3 items-start leading-snug">
+                              <span className="mono-font text-xs text-stone-400 shrink-0 mt-0.5">→</span>
+                              <span>{m}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Deadline warning */}
+                    {filingWindow && filingWindow.status !== 'ok' && (
+                      <div className={`border p-4 ${filingWindow.color === 'red' ? 'border-red-700 bg-red-50' : 'border-amber-600 bg-amber-50'}`}>
+                        <p className="display-font text-stone-900 text-[14px] leading-relaxed">
+                          <strong>Please note:</strong> {filingWindow.text}. Prompt submission of your documents is critical to avoid missing the dispute filing window.
+                        </p>
+                      </div>
+                    )}
+
+                    <p className="display-font text-stone-900 text-[15px] leading-relaxed">
+                      Please submit your documents via our secure portal, by email reply, or at your nearest branch.
+                      Incomplete submissions may delay resolution of your case.
+                    </p>
+                    <p className="display-font text-stone-600 text-[14px] italic pt-1">
+                      Sincerely,<br />Dispute Resolution Team
+                    </p>
+                  </div>
+
+                  {/* Copy */}
+                  <div className="p-4 flex justify-end bg-stone-50">
+                    <button onClick={copyDocRequest} className="mono-font text-xs flex items-center gap-1.5 text-stone-700 hover:text-stone-900 transition-colors">
+                      {docRequestCopied ? <><Check className="w-3 h-3" /> COPIED</> : <><Copy className="w-3 h-3" /> COPY REQUEST</>}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </>
+        )}
+
+        {/* ── Section 07 — Dispute Outcome Tracker ── */}
+        {visibleOutcomes.length > 0 && (
+          <>
+            <div className="section-divider" />
+            <div>
+              <div className="flex items-baseline gap-3 mb-2 flex-wrap">
+                <span className="mono-font text-xs text-stone-500">07</span>
+                <h2 className="display-font font-semibold text-2xl text-stone-900" style={{ letterSpacing: '-0.01em' }}>Dispute Tracker</h2>
+                <span className="mono-font text-xs text-stone-400 ml-auto">60-DAY WINDOW · {visibleOutcomes.length} CASE{visibleOutcomes.length !== 1 ? 'S' : ''}</span>
+              </div>
+              <p className="display-font text-stone-500 text-[15px] mb-6 ml-7" style={{ lineHeight: '1.5' }}>
+                Mark outcomes as cases resolve. Export to CSV for reporting.
+              </p>
+
+              {/* Stats */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+                {[
+                  { label: 'TOTAL (60 DAYS)', value: visibleOutcomes.length,                    sub: 'cases analyzed'           },
+                  { label: 'WIN RATE',         value: winRate !== null ? `${winRate}%` : '—',   sub: `${resolvedCount} resolved` },
+                  { label: 'WON',              value: wonCount,                                  sub: 'disputes upheld'          },
+                  { label: 'LOST / WITHDRAWN', value: `${lostCount} / ${withdrawnCount}`,        sub: 'closed against'           },
+                ].map(s => (
+                  <div key={s.label} className="border border-stone-200 p-4" style={{ background: '#FAF7F1' }}>
+                    <div className="mono-font text-xs tracking-widest text-stone-400 mb-1">{s.label}</div>
+                    <div className="display-font font-semibold text-stone-900" style={{ fontSize: '22px', letterSpacing: '-0.02em' }}>{s.value}</div>
+                    <div className="mono-font text-xs text-stone-400 mt-0.5">{s.sub}</div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Case table */}
+              <div className="border border-stone-200 overflow-hidden" style={{ background: '#FAF7F1' }}>
+                <div className="overflow-x-auto">
+                  <div style={{ minWidth: '700px' }}>
+                    <div className="grid px-4 py-2 border-b border-stone-200" style={{ gridTemplateColumns: '90px 70px 1fr 90px 70px 1fr 120px' }}>
+                      {['CASE', 'DATE', 'MERCHANT', 'AMOUNT', 'NETWORK', 'REASON CODE', 'STATUS'].map(h => (
+                        <span key={h} className="mono-font text-xs tracking-widest text-stone-400">{h}</span>
+                      ))}
+                    </div>
+                    <div style={{ maxHeight: '380px', overflowY: 'auto' }}>
+                      {visibleOutcomes.map(o => (
+                        <div key={o.id} className="grid px-4 py-3 border-b border-stone-100 items-center" style={{ gridTemplateColumns: '90px 70px 1fr 90px 70px 1fr 120px' }}>
+                          <span className="mono-font text-xs text-stone-400">{o.id}</span>
+                          <span className="mono-font text-xs text-stone-500">{new Date(o.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+                          <span className="display-font text-sm text-stone-700 truncate pr-2">{o.merchant}</span>
+                          <span className="mono-font text-xs text-stone-600">{o.amount}</span>
+                          <span className={`mono-font text-xs px-1.5 py-0.5 w-fit ${o.network === 'VISA' ? 'bg-blue-800 text-blue-50' : 'bg-red-900 text-red-50'}`}>{o.network}</span>
+                          <span className="display-font text-sm text-stone-600 truncate pr-2">{o.reasonCode}</span>
+                          <div className="flex gap-1 flex-wrap">
+                            {o.status === 'pending' ? (
+                              <>
+                                <button onClick={() => markCaseOutcome(o.id, 'won')} className="mono-font text-xs px-1.5 py-0.5 border border-emerald-700 text-emerald-700 hover:bg-emerald-50 transition-colors" title="Mark Won">W</button>
+                                <button onClick={() => markCaseOutcome(o.id, 'lost')} className="mono-font text-xs px-1.5 py-0.5 border border-red-700 text-red-700 hover:bg-red-50 transition-colors" title="Mark Lost">L</button>
+                                <button onClick={() => markCaseOutcome(o.id, 'withdrawn')} className="mono-font text-xs px-1.5 py-0.5 border border-stone-400 text-stone-500 hover:bg-stone-100 transition-colors" title="Mark Withdrawn">WD</button>
+                              </>
+                            ) : (
+                              <span className={`mono-font text-xs px-1.5 py-0.5 ${o.status === 'won' ? 'bg-emerald-900 text-emerald-50' : o.status === 'lost' ? 'bg-red-900 text-red-50' : 'bg-stone-600 text-stone-50'}`}>
+                                {o.status.toUpperCase()}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Actions */}
+              <div className="mt-3 flex items-center justify-between">
+                <button
+                  onClick={() => { if (window.confirm('Clear all tracked cases?')) setOutcomes([]) }}
+                  className="mono-font text-xs tracking-widest text-stone-400 hover:text-stone-600 transition-colors"
+                >CLEAR LOG</button>
+                <button
+                  onClick={exportCSV}
+                  className="flex items-center gap-2 mono-font text-xs tracking-widest text-stone-700 hover:text-stone-900 border border-stone-300 px-3 py-2 hover:border-stone-500 transition-colors"
+                  style={{ background: '#FAF7F1' }}
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  EXPORT CSV
+                </button>
+              </div>
             </div>
           </>
         )}
