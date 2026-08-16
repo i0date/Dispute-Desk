@@ -505,6 +505,7 @@ WRITING RULES:
 - No legal jargon
 - 3–4 short paragraphs in the body
 - Do NOT include salutation or sign-off in the body field — those are injected separately
+- Do NOT list specific documents or supporting materials in the body — document collection is handled separately. If outcome is INVESTIGATION, say only that we will be in touch regarding next steps.
 
 Return ONLY valid JSON:
 {
@@ -566,21 +567,65 @@ Return ONLY valid JSON:
     setTimeout(() => setCommsCopied(false), 2000)
   }
 
-  // ── Copy customer document request ─────────────────────────────────────────
+  // ── Copy cardholder doc list (plain — paste into any channel) ──────────────
   const copyDocRequest = () => {
     if (!result || !evidence) return
     const items = evidence.cardholder.map((item, i) => `${i + 1}. ${item.text}`).join('\n')
     const missingSection = result.missing_information?.length > 0
-      ? `\n\nAdditionally, please provide or clarify:\n${result.missing_information.map((m, i) => `${i + 1}. ${m}`).join('\n')}`
+      ? `\n\nAlso clarify:\n${result.missing_information.map(m => `• ${m}`).join('\n')}`
       : ''
-    const deadlineNote = filingWindow && filingWindow.status !== 'ok'
-      ? `\n\n⚠ FILING DEADLINE: ${filingWindow.text}. Please respond promptly to avoid missing the dispute window.`
-      : ''
-    const full = `Subject: Supporting Documents Required — Dispute Ref. ${result.recommended_reason_code}\n\nDear Valued Cardholder,\n\nThank you for contacting us regarding your dispute for ${amount ? `${amount} ${currency}` : 'the disputed amount'} at ${merchant || 'the merchant listed above'}.\n\nTo proceed with your case under Reason Code ${result.recommended_reason_code} — ${result.reason_code_title}, we require the following documents within 10 business days of this notice:\n\n${items}${missingSection}${deadlineNote}\n\nPlease submit your documents via our secure portal, by email reply, or at your nearest branch. Incomplete submissions may delay resolution of your case.\n\nThank you for your cooperation.\n\nSincerely,\nDispute Resolution Team`
+    const full = `Documents needed — ${result.recommended_reason_code} (${result.reason_code_title}):\n\n${items}${missingSection}`
     navigator.clipboard.writeText(full)
     setDocRequestCopied(true)
     setTimeout(() => setDocRequestCopied(false), 2000)
   }
+
+  // ── Goodwill / write-off script ────────────────────────────────────────────
+  const [goodwillCopied, setGoodwillCopied] = useState(false)
+  const goodwillRec = result ? (() => {
+    const amtStr = amount ? `${amount} ${currency}` : 'the disputed amount'
+    const merchantStr = merchant || 'the merchant'
+    if (smallDollar) return {
+      recommended: true, type: 'WRITE-OFF RECOMMENDED',
+      typeColor: 'bg-amber-800 text-amber-50',
+      rationale: `At ${amtStr}, investigation and network fees may exceed recovery. A direct courtesy credit is the most efficient resolution.`,
+      script: `Hi [Cardholder name],\n\nI've reviewed your dispute regarding ${merchantStr} for ${amtStr}. Given the amount, I'd like to resolve this right away by applying a one-time courtesy credit of ${amtStr} to your account — no formal chargeback required. This will appear within 3–5 business days.\n\nShall I go ahead and apply that credit now?`,
+    }
+    if (result.goodwill_outreach_required) return {
+      recommended: true, type: 'GOODWILL RECOMMENDED',
+      typeColor: 'bg-amber-700 text-amber-50',
+      rationale: result.goodwill_outreach_note || 'Case may not meet all dispute criteria. A goodwill credit protects the customer relationship.',
+      script: `Hi [Cardholder name],\n\nThank you for your patience as we reviewed your dispute for ${amtStr} at ${merchantStr}. While this case presents some challenges for a formal dispute, we value your relationship and want to make this right. I'd like to offer a one-time courtesy credit of ${amtStr} as a gesture of goodwill — it will appear within 3–5 business days.\n\nShall I go ahead and apply it?`,
+    }
+    return {
+      recommended: false, type: 'NOT RECOMMENDED',
+      typeColor: 'bg-stone-700 text-stone-50',
+      rationale: 'Clear dispute path exists. Proceed with formal chargeback filing rather than a goodwill credit.',
+      script: `Hi [Cardholder name],\n\nI've reviewed your dispute for ${amtStr} at ${merchantStr} and we have a strong basis to file a formal chargeback. I'll proceed with filing under the appropriate reason code. You can expect an update within [timeline]. Is there anything else I can help you with?`,
+    }
+  })() : null
+
+  const copyGoodwillScript = () => {
+    if (!goodwillRec) return
+    navigator.clipboard.writeText(goodwillRec.script)
+    setGoodwillCopied(true)
+    setTimeout(() => setGoodwillCopied(false), 2000)
+  }
+
+  // ── Provisional credit helpers ─────────────────────────────────────────────
+  const addBusinessDays = (dateStr, bd) => {
+    const d = new Date(dateStr)
+    let added = 0
+    const out = new Date(d)
+    while (added < bd) {
+      out.setDate(out.getDate() + 1)
+      const dow = out.getDay()
+      if (dow !== 0 && dow !== 6) added++
+    }
+    return out
+  }
+  const markProvCredit = (id) =>
+    setOutcomes(prev => prev.map(o => o.id === id ? { ...o, provCreditDate: new Date().toISOString() } : o))
 
   // ── Outcome tracker helpers ────────────────────────────────────────────────
   const markCaseOutcome = (id, status) =>
@@ -589,19 +634,24 @@ Return ONLY valid JSON:
   const exportCSV = () => {
     const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000)
     const rows = outcomes.filter(o => new Date(o.date) > sixtyDaysAgo)
-    const headers = ['Case ID', 'Date Opened', 'Merchant', 'Amount', 'Network', 'Reason Code', 'Status', 'Resolved Date']
+    const headers = ['Case ID', 'Date Opened', 'Merchant', 'Amount', 'Network', 'Reason Code', 'Status', 'Resolved Date', 'Prov Credit Date', '45BD Deadline']
     const csv = [
       headers.join(','),
-      ...rows.map(o => [
-        o.id,
-        new Date(o.date).toLocaleDateString('en-CA'),
-        `"${o.merchant}"`,
-        `"${o.amount}"`,
-        o.network,
-        `"${o.reasonCode} — ${o.reasonTitle}"`,
-        o.status,
-        o.resolvedDate ? new Date(o.resolvedDate).toLocaleDateString('en-CA') : ''
-      ].join(','))
+      ...rows.map(o => {
+        const pc45 = o.provCreditDate ? addBusinessDays(o.provCreditDate, 45) : null
+        return [
+          o.id,
+          new Date(o.date).toLocaleDateString('en-CA'),
+          `"${o.merchant}"`,
+          `"${o.amount}"`,
+          o.network,
+          `"${o.reasonCode} — ${o.reasonTitle}"`,
+          o.status,
+          o.resolvedDate ? new Date(o.resolvedDate).toLocaleDateString('en-CA') : '',
+          o.provCreditDate ? new Date(o.provCreditDate).toLocaleDateString('en-CA') : '',
+          pc45 ? pc45.toLocaleDateString('en-CA') : '',
+        ].join(',')
+      })
     ].join('\n')
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
@@ -886,6 +936,16 @@ Return ONLY valid JSON:
                   <div className="border-l-4 border-amber-700 bg-amber-50 p-5">
                     <div className="mono-font text-xs tracking-widest text-amber-900 mb-2">⚠ GOODWILL OUTREACH REQUIRED</div>
                     <p className="display-font text-stone-900 text-[15px] leading-relaxed">{result.goodwill_outreach_note}</p>
+                  </div>
+                )}
+
+                {/* SAR / STR reminder */}
+                {isFraud && amount && parseFloat(amount) >= 5000 && (
+                  <div className="border-l-4 border-red-800 bg-red-50 p-5">
+                    <div className="mono-font text-xs tracking-widest text-red-900 mb-2">⚠ SAR / STR REVIEW REQUIRED</div>
+                    <p className="display-font text-stone-900 text-[15px] leading-relaxed">
+                      This fraud case meets or exceeds the $5,000 threshold. Review for <strong>Suspicious Activity Report</strong> (SAR / FinCEN) or <strong>Suspicious Transaction Report</strong> (STR / FINTRAC) filing requirements per your institution's BSA/AML policy. Do not delay SAR filing beyond 30 days of detection.
+                    </p>
                   </div>
                 )}
 
@@ -1223,114 +1283,101 @@ Return ONLY valid JSON:
 
                 </div>
               )}
+
+              {/* ── Documents to collect — inline agent reference ── */}
+              {result && evidence && evidence.cardholder.length > 0 && (
+                <div className="mt-4 border border-stone-300" style={{ background: '#FAF7F1' }}>
+                  <div className="flex items-center justify-between px-5 py-3 border-b border-stone-200 flex-wrap gap-3">
+                    <div className="flex items-center gap-2">
+                      <ClipboardList className="w-4 h-4 text-stone-400" />
+                      <span className="mono-font text-xs tracking-widest text-stone-500">DOCUMENTS TO COLLECT FROM CARDHOLDER</span>
+                    </div>
+                    <button onClick={copyDocRequest} className="mono-font text-xs flex items-center gap-1.5 text-stone-600 hover:text-stone-900 transition-colors">
+                      {docRequestCopied ? <><Check className="w-3 h-3" /> COPIED</> : <><Copy className="w-3 h-3" /> COPY LIST</>}
+                    </button>
+                  </div>
+                  <div className="px-5 py-4 space-y-3">
+                    {evidence.cardholder.map((item, i) => {
+                      const key = `docreq-${i}`
+                      const done = !!checked[key]
+                      return (
+                        <button key={key} onClick={() => toggleCheck(key)} className="w-full text-left flex gap-3 items-start group">
+                          {done
+                            ? <CheckSquare className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
+                            : <Square className="w-4 h-4 text-stone-400 shrink-0 mt-0.5 group-hover:text-stone-600" />}
+                          <div>
+                            <span className={`display-font text-[14px] leading-snug ${done ? 'line-through text-stone-400' : 'text-stone-800'}`}>{item.text}</span>
+                            {!done && item.impact === 'required' && (
+                              <span className="mono-font text-[9px] text-red-700 ml-2 tracking-wider">REQUIRED</span>
+                            )}
+                            {!done && item.impact === 'strengthens' && (
+                              <span className="mono-font text-[9px] text-emerald-700 ml-2 tracking-wider">STRENGTHENS</span>
+                            )}
+                          </div>
+                        </button>
+                      )
+                    })}
+                  </div>
+                  {result.missing_information?.length > 0 && (
+                    <div className="px-5 pb-4 border-t border-stone-200 pt-3">
+                      <div className="mono-font text-xs tracking-widest text-stone-400 mb-2">ALSO CLARIFY</div>
+                      {result.missing_information.map((m, i) => (
+                        <div key={i} className="display-font text-stone-700 text-[14px] flex gap-2 items-start leading-snug mb-1">
+                          <span className="text-stone-400">→</span><span>{m}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </>
         )}
 
-        {/* ── Step 06 — Customer Document Request ── */}
+        {/* ── Step 06 — Goodwill Credit ── */}
         {(
           <>
             <div className="section-divider" />
             <div>
               <div className="flex items-baseline gap-3 mb-2">
                 <span className="mono-font text-xs text-stone-500">06</span>
-                <h2 className="display-font font-semibold text-2xl text-stone-900" style={{ letterSpacing: '-0.01em' }}>Customer Document Request</h2>
+                <h2 className="display-font font-semibold text-2xl text-stone-900" style={{ letterSpacing: '-0.01em' }}>Goodwill Credit</h2>
               </div>
               <p className="display-font text-stone-500 text-[15px] mb-6 ml-7" style={{ lineHeight: '1.5' }}>
-                A ready-to-send document request for the cardholder — listing exactly what to submit, specific to this reason code.
+                When a formal dispute isn't the right path — small dollar, relationship risk, or a case that doesn't quite meet threshold — use a courtesy credit instead.
               </p>
 
               {!result && (
                 <div className="border border-dashed border-stone-300 p-10 text-center" style={{ background: '#FAF7F1' }}>
-                  <ClipboardList className="w-7 h-7 text-stone-300 mx-auto mb-3" />
-                  <p className="display-font text-stone-400 italic text-[14px]">Run an analysis first to generate the customer document request.</p>
+                  <Shield className="w-7 h-7 text-stone-300 mx-auto mb-3" />
+                  <p className="display-font text-stone-400 italic text-[14px]">Run an analysis first to generate a goodwill recommendation.</p>
                 </div>
               )}
 
-              {result && evidence && (
-                <div className="border border-stone-900">
+              {result && goodwillRec && (
+                <div className="border border-stone-300" style={{ background: '#FAF7F1' }}>
                   {/* Header */}
-                  <div className="bg-stone-900 p-4 flex items-start justify-between flex-wrap gap-3">
-                    <div>
-                      <div className="mono-font text-xs tracking-widest text-stone-400 mb-1">SUBJECT</div>
-                      <div className="display-font text-stone-100 font-semibold">
-                        Supporting Documents Required — Dispute Ref. {result.recommended_reason_code}
-                      </div>
-                    </div>
-                    {filingWindow && filingWindow.status !== 'ok' && (
-                      <span className={`mono-font text-xs px-2 py-1 ${filingWindow.color === 'red' ? 'bg-red-700 text-red-50' : 'bg-amber-700 text-amber-50'}`}>
-                        {filingWindow.color === 'red' ? 'DEADLINE CRITICAL' : 'DEADLINE APPROACHING'}
-                      </span>
-                    )}
+                  <div className="flex items-center justify-between px-5 py-3 border-b border-stone-200 flex-wrap gap-3">
+                    <span className={`mono-font text-xs px-2 py-1 ${goodwillRec.typeColor}`}>{goodwillRec.type}</span>
+                    <button onClick={copyGoodwillScript} className="mono-font text-xs flex items-center gap-1.5 text-stone-600 hover:text-stone-900 transition-colors">
+                      {goodwillCopied ? <><Check className="w-3 h-3" /> COPIED</> : <><Copy className="w-3 h-3" /> COPY SCRIPT</>}
+                    </button>
                   </div>
 
-                  {/* Body */}
-                  <div className="bg-white p-6 space-y-5 border-b border-stone-200">
-                    <p className="display-font text-stone-600 text-[14px] italic">Dear Valued Cardholder,</p>
-                    <p className="display-font text-stone-900 text-[15px] leading-relaxed">
-                      Thank you for contacting us regarding your dispute for{' '}
-                      <strong>{amount ? `${amount} ${currency}` : 'the disputed transaction'}</strong>{' '}
-                      at <strong>{merchant || 'the merchant listed above'}</strong>.
-                      To proceed with your case under Reason Code{' '}
-                      <strong>{result.recommended_reason_code} — {result.reason_code_title}</strong>,
-                      we require the following documents within <strong>10 business days</strong> of this notice:
-                    </p>
+                  {/* Rationale */}
+                  <div className="px-5 pt-4 pb-2">
+                    <div className="mono-font text-xs tracking-widest text-stone-400 mb-2">RATIONALE</div>
+                    <p className="display-font text-stone-700 text-[14px] leading-relaxed">{goodwillRec.rationale}</p>
+                  </div>
 
-                    {/* Required documents */}
-                    <div className="space-y-2 pl-2">
-                      {evidence.cardholder.map((item, i) => (
-                        <div key={i} className="display-font text-stone-800 text-[15px] flex gap-3 items-start leading-snug">
-                          <span className="mono-font text-xs text-stone-400 shrink-0 mt-0.5">{String(i + 1).padStart(2, '0')}</span>
-                          <div>
-                            <span>{item.text}</span>
-                            {item.impact === 'required' && (
-                              <span className="mono-font text-[9px] text-red-700 ml-2 tracking-wider">REQUIRED</span>
-                            )}
-                          </div>
-                        </div>
+                  {/* Script */}
+                  <div className="px-5 pt-3 pb-5">
+                    <div className="mono-font text-xs tracking-widest text-stone-400 mb-3">AGENT SCRIPT</div>
+                    <div className="border border-stone-200 bg-white p-4">
+                      {goodwillRec.script.split('\n\n').map((para, i) => (
+                        <p key={i} className={`display-font text-stone-800 text-[14px] leading-relaxed ${i > 0 ? 'mt-3' : ''}`}>{para}</p>
                       ))}
                     </div>
-
-                    {/* Missing info */}
-                    {result.missing_information?.length > 0 && (
-                      <div className="border-t border-stone-100 pt-5">
-                        <p className="display-font text-stone-900 text-[15px] leading-relaxed mb-3">
-                          Additionally, please provide or clarify the following:
-                        </p>
-                        <div className="space-y-2 pl-2">
-                          {result.missing_information.map((m, i) => (
-                            <div key={i} className="display-font text-stone-700 text-[15px] flex gap-3 items-start leading-snug">
-                              <span className="mono-font text-xs text-stone-400 shrink-0 mt-0.5">→</span>
-                              <span>{m}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Deadline warning */}
-                    {filingWindow && filingWindow.status !== 'ok' && (
-                      <div className={`border p-4 ${filingWindow.color === 'red' ? 'border-red-700 bg-red-50' : 'border-amber-600 bg-amber-50'}`}>
-                        <p className="display-font text-stone-900 text-[14px] leading-relaxed">
-                          <strong>Please note:</strong> {filingWindow.text}. Prompt submission of your documents is critical to avoid missing the dispute filing window.
-                        </p>
-                      </div>
-                    )}
-
-                    <p className="display-font text-stone-900 text-[15px] leading-relaxed">
-                      Please submit your documents via our secure portal, by email reply, or at your nearest branch.
-                      Incomplete submissions may delay resolution of your case.
-                    </p>
-                    <p className="display-font text-stone-600 text-[14px] italic pt-1">
-                      Sincerely,<br />Dispute Resolution Team
-                    </p>
-                  </div>
-
-                  {/* Copy */}
-                  <div className="p-4 flex justify-end bg-stone-50">
-                    <button onClick={copyDocRequest} className="mono-font text-xs flex items-center gap-1.5 text-stone-700 hover:text-stone-900 transition-colors">
-                      {docRequestCopied ? <><Check className="w-3 h-3" /> COPIED</> : <><Copy className="w-3 h-3" /> COPY REQUEST</>}
-                    </button>
                   </div>
                 </div>
               )}
@@ -1349,7 +1396,7 @@ Return ONLY valid JSON:
                 <span className="mono-font text-xs text-stone-400 ml-auto">60-DAY WINDOW · {visibleOutcomes.length} CASE{visibleOutcomes.length !== 1 ? 'S' : ''}</span>
               </div>
               <p className="display-font text-stone-500 text-[15px] mb-6 ml-7" style={{ lineHeight: '1.5' }}>
-                Mark outcomes as cases resolve. Export to CSV for reporting.
+                Mark outcomes as cases resolve. Track provisional credit deadlines. Export to CSV for reporting.
               </p>
 
               {/* Stats */}
@@ -1377,30 +1424,57 @@ Return ONLY valid JSON:
                         <span key={h} className="mono-font text-xs tracking-widest text-stone-400">{h}</span>
                       ))}
                     </div>
-                    <div style={{ maxHeight: '380px', overflowY: 'auto' }}>
-                      {visibleOutcomes.map(o => (
-                        <div key={o.id} className="grid px-4 py-3 border-b border-stone-100 items-center" style={{ gridTemplateColumns: '90px 70px 1fr 90px 70px 1fr 120px' }}>
-                          <span className="mono-font text-xs text-stone-400">{o.id}</span>
-                          <span className="mono-font text-xs text-stone-500">{new Date(o.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
-                          <span className="display-font text-sm text-stone-700 truncate pr-2">{o.merchant}</span>
-                          <span className="mono-font text-xs text-stone-600">{o.amount}</span>
-                          <span className={`mono-font text-xs px-1.5 py-0.5 w-fit ${o.network === 'VISA' ? 'bg-blue-800 text-blue-50' : 'bg-red-900 text-red-50'}`}>{o.network}</span>
-                          <span className="display-font text-sm text-stone-600 truncate pr-2">{o.reasonCode}</span>
-                          <div className="flex gap-1 flex-wrap">
-                            {o.status === 'pending' ? (
-                              <>
-                                <button onClick={() => markCaseOutcome(o.id, 'won')} className="mono-font text-xs px-1.5 py-0.5 border border-emerald-700 text-emerald-700 hover:bg-emerald-50 transition-colors" title="Mark Won">W</button>
-                                <button onClick={() => markCaseOutcome(o.id, 'lost')} className="mono-font text-xs px-1.5 py-0.5 border border-red-700 text-red-700 hover:bg-red-50 transition-colors" title="Mark Lost">L</button>
-                                <button onClick={() => markCaseOutcome(o.id, 'withdrawn')} className="mono-font text-xs px-1.5 py-0.5 border border-stone-400 text-stone-500 hover:bg-stone-100 transition-colors" title="Mark Withdrawn">WD</button>
-                              </>
-                            ) : (
-                              <span className={`mono-font text-xs px-1.5 py-0.5 ${o.status === 'won' ? 'bg-emerald-900 text-emerald-50' : o.status === 'lost' ? 'bg-red-900 text-red-50' : 'bg-stone-600 text-stone-50'}`}>
-                                {o.status.toUpperCase()}
-                              </span>
+                    <div style={{ maxHeight: '420px', overflowY: 'auto' }}>
+                      {visibleOutcomes.map(o => {
+                        const pc10 = o.provCreditDate ? addBusinessDays(o.provCreditDate, 10) : null
+                        const pc45 = o.provCreditDate ? addBusinessDays(o.provCreditDate, 45) : null
+                        const pc90 = o.provCreditDate ? addBusinessDays(o.provCreditDate, 90) : null
+                        const now  = new Date()
+                        return (
+                          <div key={o.id} className="border-b border-stone-100">
+                            <div className="grid px-4 py-3 items-center" style={{ gridTemplateColumns: '90px 70px 1fr 90px 70px 1fr 140px' }}>
+                              <span className="mono-font text-xs text-stone-400">{o.id}</span>
+                              <span className="mono-font text-xs text-stone-500">{new Date(o.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+                              <span className="display-font text-sm text-stone-700 truncate pr-2">{o.merchant}</span>
+                              <span className="mono-font text-xs text-stone-600">{o.amount}</span>
+                              <span className={`mono-font text-xs px-1.5 py-0.5 w-fit ${o.network === 'VISA' ? 'bg-blue-800 text-blue-50' : 'bg-red-900 text-red-50'}`}>{o.network}</span>
+                              <span className="display-font text-sm text-stone-600 truncate pr-2">{o.reasonCode}</span>
+                              <div className="flex gap-1 flex-wrap">
+                                {o.status === 'pending' ? (
+                                  <>
+                                    <button onClick={() => markCaseOutcome(o.id, 'won')} className="mono-font text-xs px-1.5 py-0.5 border border-emerald-700 text-emerald-700 hover:bg-emerald-50 transition-colors" title="Mark Won">W</button>
+                                    <button onClick={() => markCaseOutcome(o.id, 'lost')} className="mono-font text-xs px-1.5 py-0.5 border border-red-700 text-red-700 hover:bg-red-50 transition-colors" title="Mark Lost">L</button>
+                                    <button onClick={() => markCaseOutcome(o.id, 'withdrawn')} className="mono-font text-xs px-1.5 py-0.5 border border-stone-400 text-stone-500 hover:bg-stone-100 transition-colors" title="Mark Withdrawn">WD</button>
+                                    {!o.provCreditDate && (
+                                      <button onClick={() => markProvCredit(o.id)} className="mono-font text-xs px-1.5 py-0.5 border border-blue-700 text-blue-700 hover:bg-blue-50 transition-colors" title="Provisional Credit Issued">PC</button>
+                                    )}
+                                  </>
+                                ) : (
+                                  <span className={`mono-font text-xs px-1.5 py-0.5 ${o.status === 'won' ? 'bg-emerald-900 text-emerald-50' : o.status === 'lost' ? 'bg-red-900 text-red-50' : 'bg-stone-600 text-stone-50'}`}>
+                                    {o.status.toUpperCase()}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Provisional credit deadline row */}
+                            {o.provCreditDate && (
+                              <div className="px-4 pb-2 flex items-center gap-4 flex-wrap" style={{ background: '#EEF2FF' }}>
+                                <span className="mono-font text-[10px] text-blue-800 tracking-wider">PROV CREDIT: {new Date(o.provCreditDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+                                <span className={`mono-font text-[10px] tracking-wider ${pc10 && pc10 < now ? 'text-red-700' : 'text-blue-600'}`}>
+                                  10BD: {pc10?.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} {pc10 && pc10 < now ? '⚠ PAST' : ''}
+                                </span>
+                                <span className={`mono-font text-[10px] tracking-wider ${pc45 && pc45 < now ? 'text-red-700' : 'text-blue-600'}`}>
+                                  45BD: {pc45?.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} {pc45 && pc45 < now ? '⚠ PAST' : ''}
+                                </span>
+                                <span className={`mono-font text-[10px] tracking-wider ${pc90 && pc90 < now ? 'text-red-700' : 'text-stone-500'}`}>
+                                  90BD: {pc90?.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                                </span>
+                              </div>
                             )}
                           </div>
-                        </div>
-                      ))}
+                        )
+                      })}
                     </div>
                   </div>
                 </div>
