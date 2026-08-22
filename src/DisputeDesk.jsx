@@ -224,6 +224,8 @@ export default function DisputeDesk() {
   const [commsCopied, setCommsCopied]                       = useState(false)
   const [docRequestCopied, setDocRequestCopied]             = useState(false)
   const [goodwillCopied, setGoodwillCopied]                 = useState(false)
+  const [editingRow, setEditingRow]                         = useState(null)   // id of row being edited
+  const [editDraft, setEditDraft]                           = useState({})     // draft field values
 
   // ── Outcome tracking (60-day dispute log) ─────────────────────────────────
   const [outcomes, setOutcomes] = useState(() => {
@@ -632,6 +634,23 @@ Return ONLY valid JSON:
 
   const revertCase = (id) =>
     setOutcomes(prev => prev.map(o => o.id === id ? { ...o, status: 'pending', resolvedDate: null } : o))
+
+  const startEdit = (o) => {
+    setEditingRow(o.id)
+    setEditDraft({ merchant: o.merchant, amount: o.amount, reasonCode: o.reasonCode, reasonTitle: o.reasonTitle, notes: o.notes || '' })
+  }
+  const cancelEdit = () => { setEditingRow(null); setEditDraft({}) }
+  const saveEdit = (id) => {
+    setOutcomes(prev => prev.map(o => o.id === id ? { ...o, ...editDraft } : o))
+    setEditingRow(null)
+    setEditDraft({})
+  }
+  const deleteCase = (id) => {
+    if (window.confirm('Remove this case from the tracker?')) {
+      setOutcomes(prev => prev.filter(o => o.id !== id))
+      if (editingRow === id) { setEditingRow(null); setEditDraft({}) }
+    }
+  }
 
   const exportCSV = () => {
     const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000)
@@ -1456,52 +1475,124 @@ Return ONLY valid JSON:
               <div className="border border-stone-200 overflow-hidden" style={{ background: '#FAF7F1' }}>
                 <div className="overflow-x-auto">
                   <div style={{ minWidth: '700px' }}>
-                    <div className="grid px-4 py-2 border-b border-stone-200" style={{ gridTemplateColumns: '90px 70px 1fr 90px 70px 1fr 120px' }}>
-                      {['CASE', 'DATE', 'MERCHANT', 'AMOUNT', 'NETWORK', 'REASON CODE', 'STATUS'].map(h => (
-                        <span key={h} className="mono-font text-xs tracking-widest text-stone-400">{h}</span>
+                    {/* Header */}
+                    <div className="grid px-4 py-2 border-b border-stone-300" style={{ gridTemplateColumns: '90px 60px 1fr 90px 1fr 160px 40px', background: '#EEE9E0' }}>
+                      {['CASE', 'DATE', 'MERCHANT', 'AMOUNT', 'REASON CODE', 'STATUS', ''].map(h => (
+                        <span key={h} className="mono-font text-[10px] tracking-widest text-stone-500">{h}</span>
                       ))}
                     </div>
-                    <div style={{ maxHeight: '420px', overflowY: 'auto' }}>
+                    <div style={{ maxHeight: '480px', overflowY: 'auto' }}>
                       {visibleOutcomes.map(o => {
                         const pc10 = o.provCreditDate ? addBusinessDays(o.provCreditDate, 10) : null
                         const pc45 = o.provCreditDate ? addBusinessDays(o.provCreditDate, 45) : null
                         const pc90 = o.provCreditDate ? addBusinessDays(o.provCreditDate, 90) : null
                         const now  = new Date()
+                        const isEditing = editingRow === o.id
+
                         return (
                           <div key={o.id} className="border-b border-stone-100">
-                            <div className="grid px-4 py-3 items-center" style={{ gridTemplateColumns: '90px 70px 1fr 90px 70px 1fr 140px' }}>
-                              <span className="mono-font text-xs text-stone-400">{o.id}</span>
-                              <span className="mono-font text-xs text-stone-500">{new Date(o.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
-                              <span className="display-font text-sm text-stone-700 truncate pr-2">{o.merchant}</span>
-                              <span className="mono-font text-xs text-stone-600">{o.amount}</span>
-                              <span className={`mono-font text-xs px-1.5 py-0.5 w-fit ${o.network === 'VISA' ? 'bg-blue-800 text-blue-50' : 'bg-red-900 text-red-50'}`}>{o.network}</span>
-                              <span className="display-font text-sm text-stone-600 truncate pr-2">{o.reasonCode}</span>
-                              <div className="flex gap-1 flex-wrap items-center">
-                                {o.status === 'pending' ? (
-                                  <>
-                                    <button onClick={() => markCaseOutcome(o.id, 'won')} className="mono-font text-xs px-1.5 py-0.5 border border-emerald-700 text-emerald-700 hover:bg-emerald-50 transition-colors" title="Mark Won">WON</button>
-                                    <button onClick={() => markCaseOutcome(o.id, 'lost')} className="mono-font text-xs px-1.5 py-0.5 border border-red-700 text-red-700 hover:bg-red-50 transition-colors" title="Mark Lost">LOST</button>
-                                    <button onClick={() => markCaseOutcome(o.id, 'withdrawn')} className="mono-font text-xs px-1.5 py-0.5 border border-stone-400 text-stone-500 hover:bg-stone-100 transition-colors" title="Mark Withdrawn">WD</button>
-                                    {!o.provCreditDate && (
-                                      <button onClick={() => markProvCredit(o.id)} className="mono-font text-xs px-1.5 py-0.5 border border-blue-700 text-blue-700 hover:bg-blue-50 transition-colors" title="Provisional Credit Issued">PC</button>
-                                    )}
-                                  </>
-                                ) : (
-                                  <div className="flex items-center gap-1">
-                                    <span className={`mono-font text-xs px-1.5 py-0.5 ${o.status === 'won' ? 'bg-emerald-900 text-emerald-50' : o.status === 'lost' ? 'bg-red-900 text-red-50' : 'bg-stone-600 text-stone-50'}`}>
-                                      {o.status.toUpperCase()}
-                                    </span>
-                                    <button onClick={() => revertCase(o.id)} className="mono-font text-[10px] text-stone-400 hover:text-stone-700 transition-colors px-1" title="Re-mark this case">↩</button>
+                            {isEditing ? (
+                              /* ── Edit mode ─────────────────────────────────── */
+                              <div className="px-4 py-3 space-y-3" style={{ background: '#FDF9F3' }}>
+                                <div className="mono-font text-[10px] tracking-widest text-stone-400 mb-2">EDITING {o.id}</div>
+                                <div className="grid gap-3" style={{ gridTemplateColumns: '1fr 1fr' }}>
+                                  <div>
+                                    <label className="mono-font text-[9px] tracking-widest text-stone-400 block mb-1">MERCHANT</label>
+                                    <input
+                                      className="input-field"
+                                      value={editDraft.merchant || ''}
+                                      onChange={e => setEditDraft(d => ({ ...d, merchant: e.target.value }))}
+                                      style={{ fontSize: '13px', padding: '8px 10px' }}
+                                    />
                                   </div>
-                                )}
-                                {o.status !== 'pending' && !o.provCreditDate && (
-                                  <button onClick={() => markProvCredit(o.id)} className="mono-font text-xs px-1.5 py-0.5 border border-blue-700 text-blue-700 hover:bg-blue-50 transition-colors" title="Provisional Credit Issued">PC</button>
-                                )}
+                                  <div>
+                                    <label className="mono-font text-[9px] tracking-widest text-stone-400 block mb-1">AMOUNT</label>
+                                    <input
+                                      className="input-field"
+                                      value={editDraft.amount || ''}
+                                      onChange={e => setEditDraft(d => ({ ...d, amount: e.target.value }))}
+                                      style={{ fontSize: '13px', padding: '8px 10px' }}
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="mono-font text-[9px] tracking-widest text-stone-400 block mb-1">REASON CODE</label>
+                                    <input
+                                      className="input-field"
+                                      value={editDraft.reasonCode || ''}
+                                      onChange={e => setEditDraft(d => ({ ...d, reasonCode: e.target.value }))}
+                                      style={{ fontSize: '13px', padding: '8px 10px' }}
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="mono-font text-[9px] tracking-widest text-stone-400 block mb-1">STATUS</label>
+                                    <select
+                                      className="input-field"
+                                      value={o.status}
+                                      onChange={e => markCaseOutcome(o.id, e.target.value)}
+                                      style={{ fontSize: '13px', padding: '8px 10px' }}
+                                    >
+                                      <option value="pending">Pending</option>
+                                      <option value="won">Won</option>
+                                      <option value="lost">Lost</option>
+                                      <option value="withdrawn">Withdrawn</option>
+                                    </select>
+                                  </div>
+                                </div>
+                                <div>
+                                  <label className="mono-font text-[9px] tracking-widest text-stone-400 block mb-1">NOTES</label>
+                                  <input
+                                    className="input-field"
+                                    value={editDraft.notes || ''}
+                                    onChange={e => setEditDraft(d => ({ ...d, notes: e.target.value }))}
+                                    placeholder="Optional case notes..."
+                                    style={{ fontSize: '13px', padding: '8px 10px' }}
+                                  />
+                                </div>
+                                <div className="flex gap-2 pt-1">
+                                  <button onClick={() => saveEdit(o.id)} className="mono-font text-[10px] tracking-widest px-3 py-1.5 bg-stone-900 text-stone-50 hover:bg-stone-700 transition-colors">SAVE</button>
+                                  <button onClick={cancelEdit} className="mono-font text-[10px] tracking-widest px-3 py-1.5 border border-stone-300 text-stone-500 hover:border-stone-500 transition-colors">CANCEL</button>
+                                  <button onClick={() => deleteCase(o.id)} className="mono-font text-[10px] tracking-widest px-3 py-1.5 border border-red-300 text-red-600 hover:bg-red-50 transition-colors ml-auto">DELETE CASE</button>
+                                </div>
                               </div>
-                            </div>
+                            ) : (
+                              /* ── View mode ─────────────────────────────────── */
+                              <div className="grid px-4 py-3 items-center" style={{ gridTemplateColumns: '90px 60px 1fr 90px 1fr 160px 40px' }}>
+                                <span className="mono-font text-xs text-stone-400">{o.id}</span>
+                                <span className="mono-font text-xs text-stone-500">{new Date(o.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+                                <span className="display-font text-sm text-stone-700 truncate pr-2">{o.merchant}</span>
+                                <span className="mono-font text-xs text-stone-600">{o.amount}</span>
+                                <div className="pr-2">
+                                  <span className="mono-font text-xs text-stone-600">{o.reasonCode}</span>
+                                  {o.notes && <p className="display-font text-[11px] text-stone-400 truncate mt-0.5 italic">{o.notes}</p>}
+                                </div>
+                                <div className="flex gap-1 flex-wrap items-center">
+                                  {o.status === 'pending' ? (
+                                    <>
+                                      <button onClick={() => markCaseOutcome(o.id, 'won')} className="mono-font text-[10px] px-1.5 py-0.5 border border-emerald-700 text-emerald-700 hover:bg-emerald-50 transition-colors">WON</button>
+                                      <button onClick={() => markCaseOutcome(o.id, 'lost')} className="mono-font text-[10px] px-1.5 py-0.5 border border-red-700 text-red-700 hover:bg-red-50 transition-colors">LOST</button>
+                                      <button onClick={() => markCaseOutcome(o.id, 'withdrawn')} className="mono-font text-[10px] px-1.5 py-0.5 border border-stone-400 text-stone-500 hover:bg-stone-100 transition-colors">WD</button>
+                                      {!o.provCreditDate && (
+                                        <button onClick={() => markProvCredit(o.id)} className="mono-font text-[10px] px-1.5 py-0.5 border border-blue-700 text-blue-700 hover:bg-blue-50 transition-colors">PC</button>
+                                      )}
+                                    </>
+                                  ) : (
+                                    <div className="flex items-center gap-1">
+                                      <span className={`mono-font text-[10px] px-1.5 py-0.5 ${o.status === 'won' ? 'bg-emerald-900 text-emerald-50' : o.status === 'lost' ? 'bg-red-900 text-red-50' : 'bg-stone-600 text-stone-50'}`}>
+                                        {o.status.toUpperCase()}
+                                      </span>
+                                      <button onClick={() => revertCase(o.id)} className="mono-font text-[10px] text-stone-400 hover:text-stone-700 transition-colors px-1" title="Re-mark">↩</button>
+                                    </div>
+                                  )}
+                                  {o.status !== 'pending' && !o.provCreditDate && (
+                                    <button onClick={() => markProvCredit(o.id)} className="mono-font text-[10px] px-1.5 py-0.5 border border-blue-700 text-blue-700 hover:bg-blue-50 transition-colors">PC</button>
+                                  )}
+                                </div>
+                                <button onClick={() => startEdit(o)} className="mono-font text-[10px] text-stone-300 hover:text-stone-700 transition-colors text-center" title="Edit row">✏</button>
+                              </div>
+                            )}
 
                             {/* Provisional credit deadline row */}
-                            {o.provCreditDate && (
+                            {!isEditing && o.provCreditDate && (
                               <div className="px-4 pb-2 flex items-center gap-4 flex-wrap" style={{ background: '#EEF2FF' }}>
                                 <span className="mono-font text-[10px] text-blue-800 tracking-wider">PROV CREDIT: {new Date(o.provCreditDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
                                 <span className={`mono-font text-[10px] tracking-wider ${pc10 && pc10 < now ? 'text-red-700' : 'text-blue-600'}`}>
