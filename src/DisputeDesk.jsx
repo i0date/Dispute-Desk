@@ -22,6 +22,55 @@ class ErrorBoundary extends React.Component {
   }
 }
 
+// ─── DFA integration helpers ──────────────────────────────────────────────────
+
+// Estimate DFA funding grade from reason code + amount (no behavioral signals in tracker)
+const DFA_BASE_WIN = {
+  "10.1": 0.85, "10.2": 0.48, "10.4": 0.76, "10.5": 0.93,
+  "13.1": 0.41, "13.3": 0.30, "13.5": 0.57, "13.6": 0.68, "13.7": 0.44,
+  "4837": 0.78, "4840": 0.72, "4849": 0.65, "4863": 0.73,
+  "4870": 0.87, "4871": 0.81,
+  "4841": 0.48, "4853": 0.33, "4855": 0.44, "4859": 0.46,
+  "4860": 0.70, "4854": 0.38,
+}
+function estimateFundingGrade(reasonCode, amountStr) {
+  if (!reasonCode || !amountStr) return null
+  const code   = (reasonCode || '').split(/[\s–—]/)[0].trim()
+  const amount = parseFloat(amountStr)
+  if (isNaN(amount) || amount <= 0) return null
+  const p = DFA_BASE_WIN[code] ?? 0.50
+  const amtScore = amount < 50 ? 0.15 : amount < 100 ? 0.40 : amount < 200 ? 0.65 : amount <= 2000 ? 1.00 : amount <= 5000 ? 0.85 : 0.70
+  const score = Math.round((p * 0.55 + 0.90 * 0.25 + amtScore * 0.20) * 100)
+  if (score >= 75) return { label: 'A', bg: 'bg-emerald-900', text: 'text-emerald-50' }
+  if (score >= 60) return { label: 'B', bg: 'bg-stone-700',   text: 'text-stone-50'  }
+  if (score >= 45) return { label: 'C', bg: 'bg-amber-800',   text: 'text-amber-50'  }
+  return              { label: 'D', bg: 'bg-red-900',     text: 'text-red-50'    }
+}
+
+// Export pending tracker cases as DFA-ready CSV
+function exportDFACSV(outcomes) {
+  const pending = outcomes.filter(o => o.status === 'pending')
+  if (!pending.length) { alert('No pending cases to export.'); return }
+  const headers = ['id','code','amount','filed_days_ago','window_days','avs_mismatch','no_3ds','delivery_confirmed','merchant_acknowledged','pin_verified','vfmp_enrolled','strong_docs','merchant_cbr','prior_claims','note']
+  const rows = pending.map(o => {
+    const code   = (o.reasonCode || '').split(/[\s–—]/)[0].trim()
+    const amount = parseFloat(o.amount) || 0
+    const note   = `"DisputeDesk export — ${o.merchant || ''} — ${o.amount || ''}. ${(o.notes || '').replace(/"/g,"'")}"`
+    return [o.id, code, amount, 0, 120, 'no','no','no','no','no','no','no', '0.8', 0, note].join(',')
+  })
+  const blob = new Blob([[headers.join(','), ...rows].join('\n')], { type: 'text/csv' })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = `disputedesk-to-dfa-${new Date().toISOString().split('T')[0]}.csv`
+  a.click()
+}
+
+// Calendar days until a date (negative = past)
+function daysUntil(date) {
+  if (!date) return null
+  return Math.round((new Date(date) - new Date()) / (1000 * 60 * 60 * 24))
+}
+
 // ─── Evidence package by reason code ─────────────────────────────────────────
 
 function getEvidencePackage(code, category) {
@@ -1514,8 +1563,8 @@ Return ONLY valid JSON:
                 <div className="overflow-x-auto">
                   <div style={{ minWidth: '700px' }}>
                     {/* Header */}
-                    <div className="grid px-4 py-2 border-b border-stone-300" style={{ gridTemplateColumns: '90px 60px 1fr 90px 1fr 160px 40px', background: '#EEE9E0' }}>
-                      {['CASE', 'DATE', 'MERCHANT', 'AMOUNT', 'REASON CODE', 'STATUS', ''].map(h => (
+                    <div className="grid px-4 py-2 border-b border-stone-300" style={{ gridTemplateColumns: '90px 60px 1fr 90px 1fr 44px 160px 40px', background: '#EEE9E0' }}>
+                      {['CASE', 'DATE', 'MERCHANT', 'AMOUNT', 'REASON CODE', 'DFA', 'STATUS', ''].map(h => (
                         <span key={h} className="mono-font text-[10px] tracking-widest text-stone-500">{h}</span>
                       ))}
                     </div>
@@ -1594,7 +1643,7 @@ Return ONLY valid JSON:
                               </div>
                             ) : (
                               /* ── View mode ─────────────────────────────────── */
-                              <div className="grid px-4 py-3 items-center" style={{ gridTemplateColumns: '90px 60px 1fr 90px 1fr 160px 40px' }}>
+                              <div className="grid px-4 py-3 items-center" style={{ gridTemplateColumns: '90px 60px 1fr 90px 1fr 44px 160px 40px' }}>
                                 <span className="mono-font text-xs text-stone-400">{o.id}</span>
                                 <span className="mono-font text-xs text-stone-500">{new Date(o.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
                                 <span className="display-font text-sm text-stone-700 truncate pr-2">{o.merchant}</span>
@@ -1603,6 +1652,13 @@ Return ONLY valid JSON:
                                   <span className="mono-font text-xs text-stone-600">{o.reasonCode}</span>
                                   {o.notes && <p className="display-font text-[11px] text-stone-400 truncate mt-0.5 italic">{o.notes}</p>}
                                 </div>
+                                {/* DFA grade badge */}
+                                {(() => {
+                                  const dfaG = estimateFundingGrade(o.reasonCode, o.amount)
+                                  return dfaG
+                                    ? <span className={`mono-font text-[10px] font-bold px-1.5 py-0.5 ${dfaG.bg} ${dfaG.text} justify-self-start`} title={`Estimated DFA funding grade — ${dfaG.label} based on reason code and amount. Open DFA for full underwriting.`}>{dfaG.label}</span>
+                                    : <span className="text-stone-300 mono-font text-[10px]">—</span>
+                                })()}
                                 <div className="flex gap-1 flex-wrap items-center">
                                   {o.status === 'pending' ? (
                                     <>
@@ -1632,16 +1688,21 @@ Return ONLY valid JSON:
                             {/* Provisional credit deadline row */}
                             {!isEditing && o.provCreditDate && (
                               <div className="px-4 pb-2 flex items-center gap-4 flex-wrap" style={{ background: '#EEF2FF' }}>
-                                <span className="mono-font text-[10px] text-blue-800 tracking-wider">PROV CREDIT: {new Date(o.provCreditDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
-                                <span className={`mono-font text-[10px] tracking-wider ${pc10 && pc10 < now ? 'text-red-700' : 'text-blue-600'}`}>
-                                  10BD: {pc10?.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} {pc10 && pc10 < now ? '⚠ PAST' : ''}
-                                </span>
-                                <span className={`mono-font text-[10px] tracking-wider ${pc45 && pc45 < now ? 'text-red-700' : 'text-blue-600'}`}>
-                                  45BD: {pc45?.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} {pc45 && pc45 < now ? '⚠ PAST' : ''}
-                                </span>
-                                <span className={`mono-font text-[10px] tracking-wider ${pc90 && pc90 < now ? 'text-red-700' : 'text-stone-500'}`}>
-                                  90BD: {pc90?.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                                </span>
+                                <span className="mono-font text-[10px] text-blue-800 tracking-wider">PC ISSUED: {new Date(o.provCreditDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+                                {[{ label: '10BD', date: pc10 }, { label: '45BD', date: pc45 }, { label: '90BD', date: pc90 }].map(({ label, date }) => {
+                                  if (!date) return null
+                                  const d = daysUntil(date)
+                                  const past = d !== null && d < 0
+                                  const urgent = !past && d !== null && d <= 5
+                                  const warning = !past && !urgent && d !== null && d <= 14
+                                  const cls = past ? 'text-red-700 font-bold' : urgent ? 'text-red-600 font-bold' : warning ? 'text-amber-700' : 'text-blue-600'
+                                  const badge = past ? '⚠ PAST' : d !== null ? `(${d}d)` : ''
+                                  return (
+                                    <span key={label} className={`mono-font text-[10px] tracking-wider ${cls}`}>
+                                      {label}: {date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} {badge}
+                                    </span>
+                                  )
+                                })}
                               </div>
                             )}
                           </div>
@@ -1653,19 +1714,30 @@ Return ONLY valid JSON:
               </div>
 
               {/* Actions */}
-              <div className="mt-3 flex items-center justify-between">
+              <div className="mt-3 flex items-center justify-between flex-wrap gap-2">
                 <button
                   onClick={() => { if (window.confirm('Clear all tracked cases?')) setOutcomes([]) }}
                   className="mono-font text-xs tracking-widest text-stone-400 hover:text-stone-600 transition-colors"
                 >CLEAR LOG</button>
-                <button
-                  onClick={exportCSV}
-                  className="flex items-center gap-2 mono-font text-xs tracking-widest text-stone-700 hover:text-stone-900 border border-stone-300 px-3 py-2 hover:border-stone-500 transition-colors"
-                  style={{ background: '#FAF7F1' }}
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  EXPORT CSV
-                </button>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    onClick={() => exportDFACSV(visibleOutcomes)}
+                    className="flex items-center gap-2 mono-font text-xs tracking-widest text-emerald-800 hover:text-emerald-900 border border-emerald-700 px-3 py-2 hover:bg-emerald-50 transition-colors"
+                    style={{ background: '#FAF7F1' }}
+                    title="Export pending cases as a DFA-ready CSV — upload directly to the Dispute Funding Assessor"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    EXPORT TO DFA
+                  </button>
+                  <button
+                    onClick={exportCSV}
+                    className="flex items-center gap-2 mono-font text-xs tracking-widest text-stone-700 hover:text-stone-900 border border-stone-300 px-3 py-2 hover:border-stone-500 transition-colors"
+                    style={{ background: '#FAF7F1' }}
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    EXPORT CSV
+                  </button>
+                </div>
               </div>
             </div>
           </>
