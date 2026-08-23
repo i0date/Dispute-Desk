@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { FileText, AlertCircle, Loader2, Copy, Check, ArrowRight, CheckSquare, Square, Shield, MessageSquare, ClipboardList, Download } from 'lucide-react'
+import { FileText, AlertCircle, Loader2, Copy, Check, ArrowRight, CheckSquare, Square, Shield, MessageSquare, ClipboardList, Download, Pencil } from 'lucide-react'
 
 // ─── Error boundary — catches render crashes and shows the actual error ────────
 class ErrorBoundary extends React.Component {
@@ -224,6 +224,7 @@ export default function DisputeDesk() {
   const [commsCopied, setCommsCopied]                       = useState(false)
   const [docRequestCopied, setDocRequestCopied]             = useState(false)
   const [goodwillCopied, setGoodwillCopied]                 = useState(false)
+  const [disputedAmount, setDisputedAmount]                 = useState('')     // partial dispute amount (optional)
   const [editingRow, setEditingRow]                         = useState(null)   // id of row being edited
   const [editDraft, setEditDraft]                           = useState({})     // draft field values
 
@@ -356,7 +357,7 @@ CUSTOMER COMPLAINT:
 
 TRANSACTION DETAILS:
 - Merchant: ${merchant || 'Not provided'}
-- Amount: ${amount ? `${amount} ${currency}` : 'Not provided'}
+- Transaction Amount: ${amount ? `${amount} ${currency}` : 'Not provided'}${disputedAmount && parseFloat(disputedAmount) > 0 && disputedAmount !== amount ? `\n- Disputed Amount: ${disputedAmount} ${currency} (PARTIAL DISPUTE — cardholder is only disputing this portion of the transaction)` : ''}
 - Transaction Date: ${transactionDate || 'Not provided'}
 - Expected Delivery/Service Date: ${expectedDeliveryDate || 'Not provided'}
 - Card Network: ${network === 'visa' ? 'Visa' : 'Mastercard'}
@@ -688,19 +689,25 @@ Return ONLY valid JSON:
   try { filingWindow = filingWindowStatus(isFraud) } catch(e) { console.error('[DD] filingWindow crash:', e) }
   let evidence      = null
   try { evidence = result ? getEvidencePackage(result?.recommended_reason_code, result?.category) : null } catch(e) { console.error('[DD] evidence crash:', e) }
-  const smallDollar = amount && parseFloat(amount) > 0 && parseFloat(amount) < 50
 
-  // Goodwill recommendation — computed after smallDollar
+  // effectiveAmount: use disputed amount if provided (partial dispute), otherwise use full transaction amount
+  const isPartialDispute   = disputedAmount && parseFloat(disputedAmount) > 0 && disputedAmount !== amount
+  const effectiveAmount    = isPartialDispute ? disputedAmount : amount
+  const effectiveAmtNum    = parseFloat(effectiveAmount) || 0
+  const smallDollar        = effectiveAmtNum > 0 && effectiveAmtNum < 50
+
+  // Goodwill recommendation — only set when goodwill is actually the recommended path
   let goodwillRec = null
   try {
     if (result) {
-      const amtStr      = amount ? `${amount} ${currency}` : 'the disputed amount'
+      const amtStr      = effectiveAmount ? `${effectiveAmount} ${currency}` : 'the disputed amount'
       const merchantStr = merchant || 'the merchant'
+      const partialNote = isPartialDispute ? ` (partial dispute — cardholder is disputing ${disputedAmount} ${currency} of a ${amount} ${currency} transaction)` : ''
       if (smallDollar) {
         goodwillRec = {
           recommended: true, type: 'WRITE-OFF RECOMMENDED',
           typeColor: 'bg-amber-800 text-amber-50',
-          rationale: `At ${amtStr}, investigation and network fees may exceed recovery. A direct courtesy credit is the most efficient resolution.`,
+          rationale: `At ${amtStr}${partialNote}, investigation and network fees may exceed recovery. A direct courtesy credit is the most efficient resolution.`,
           script: `Hi [Cardholder name],\n\nI've reviewed your dispute regarding ${merchantStr} for ${amtStr}. Given the amount, I'd like to resolve this right away by applying a one-time courtesy credit of ${amtStr} to your account — no formal chargeback required. This will appear within 3-5 business days.\n\nShall I go ahead and apply that credit now?`,
         }
       } else if (result.goodwill_outreach_required) {
@@ -708,14 +715,14 @@ Return ONLY valid JSON:
           recommended: true, type: 'GOODWILL RECOMMENDED',
           typeColor: 'bg-amber-700 text-amber-50',
           rationale: result.goodwill_outreach_note || 'Case may not meet all dispute criteria. A goodwill credit protects the customer relationship.',
-          script: `Hi [Cardholder name],\n\nThank you for your patience as we reviewed your dispute for ${amtStr} at ${merchantStr}. While this case presents some challenges for a formal dispute, we value your relationship and want to make this right. I'd like to offer a one-time courtesy credit of ${amtStr} as a gesture of goodwill — it will appear within 3-5 business days.\n\nShall I go ahead and apply it?`,
+          script: `Hi [Cardholder name],\n\nThank you for your patience as we reviewed your dispute for ${amtStr} at ${merchantStr}${partialNote ? partialNote : ''}. While this case presents some challenges for a formal dispute, we value your relationship and want to make this right. I'd like to offer a one-time courtesy credit of ${amtStr} as a gesture of goodwill — it will appear within 3-5 business days.\n\nShall I go ahead and apply it?`,
         }
       } else {
+        // Clear dispute path — goodwill is NOT recommended. No script needed.
         goodwillRec = {
           recommended: false, type: 'NOT RECOMMENDED',
           typeColor: 'bg-stone-700 text-stone-50',
-          rationale: 'Clear dispute path exists. Proceed with formal chargeback filing rather than a goodwill credit.',
-          script: `Hi [Cardholder name],\n\nI've reviewed your dispute for ${amtStr} at ${merchantStr} and we have a strong basis to file a formal chargeback. I'll proceed with filing under the appropriate reason code. You can expect an update within [timeline]. Is there anything else I can help you with?`,
+          rationale: 'A clear chargeback path exists for this case. A courtesy credit would under-recover for the cardholder and is unnecessary — proceed with formal dispute filing using Steps 01–04.',
         }
       }
     }
@@ -853,13 +860,30 @@ Return ONLY valid JSON:
                   <input type="text" value={merchant} onChange={e => setMerchant(e.target.value)} placeholder="e.g. Sephora" className="input-field" />
                 </div>
                 <div>
-                  <label className="input-label">Amount</label>
+                  <label className="input-label">Transaction Amount</label>
                   <div className="flex gap-2">
                     <input type="text" value={amount} onChange={e => setAmount(e.target.value)} placeholder="345.81" className="input-field" style={{ flex: 2 }} />
                     <select value={currency} onChange={e => setCurrency(e.target.value)} className="input-field mono-font" style={{ flex: 1, fontSize: '13px' }}>
                       <option>CAD</option><option>USD</option><option>EUR</option><option>GBP</option>
                     </select>
                   </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="input-label">Disputed Amount <span className="mono-font text-[10px] text-stone-400 normal-case tracking-normal">(if partial — leave blank if disputing full amount)</span></label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={disputedAmount}
+                    onChange={e => setDisputedAmount(e.target.value)}
+                    placeholder={amount || '0.00'}
+                    className="input-field"
+                    style={{ maxWidth: '200px' }}
+                  />
+                  {disputedAmount && parseFloat(disputedAmount) > 0 && disputedAmount !== amount && (
+                    <span className="mono-font text-[10px] text-amber-700 self-center">PARTIAL — disputing {disputedAmount} of {amount || '?'} {currency}</span>
+                  )}
                 </div>
               </div>
 
@@ -878,7 +902,7 @@ Return ONLY valid JSON:
                 <div className="border border-stone-400 bg-stone-50 p-4">
                   <div className="mono-font text-xs tracking-widest text-stone-500 mb-1">⚠ SMALL DOLLAR — CONSIDER WRITE-OFF</div>
                   <p className="display-font text-stone-700 text-[14px] leading-relaxed">
-                    At {amount} {currency}, staff time and network fees may exceed recovery. Consider a direct goodwill credit before filing a formal dispute.
+                    At {effectiveAmount} {currency}{isPartialDispute ? ` (partial dispute on a ${amount} ${currency} transaction)` : ''}, staff time and network fees may exceed recovery. Consider a direct courtesy credit before filing a formal dispute.
                   </p>
                 </div>
               )}
@@ -996,7 +1020,7 @@ Return ONLY valid JSON:
                 )}
 
                 {/* SAR / STR reminder */}
-                {isFraud && amount && parseFloat(amount) >= 5000 && (
+                {isFraud && effectiveAmtNum >= 5000 && (
                   <div className="border-l-4 border-red-800 bg-red-50 p-5">
                     <div className="mono-font text-xs tracking-widest text-red-900 mb-2">⚠ SAR / STR REVIEW REQUIRED</div>
                     <p className="display-font text-stone-900 text-[15px] leading-relaxed">
@@ -1415,9 +1439,11 @@ Return ONLY valid JSON:
                   {/* Header */}
                   <div className="flex items-center justify-between px-5 py-3 border-b border-stone-200 flex-wrap gap-3">
                     <span className={`mono-font text-xs px-2 py-1 ${goodwillRec.typeColor}`}>{goodwillRec.type}</span>
-                    <button onClick={copyGoodwillScript} className="mono-font text-xs flex items-center gap-1.5 text-stone-600 hover:text-stone-900 transition-colors">
-                      {goodwillCopied ? <><Check className="w-3 h-3" /> COPIED</> : <><Copy className="w-3 h-3" /> COPY SCRIPT</>}
-                    </button>
+                    {goodwillRec.recommended && (
+                      <button onClick={copyGoodwillScript} className="mono-font text-xs flex items-center gap-1.5 text-stone-600 hover:text-stone-900 transition-colors">
+                        {goodwillCopied ? <><Check className="w-3 h-3" /> COPIED</> : <><Copy className="w-3 h-3" /> COPY SCRIPT</>}
+                      </button>
+                    )}
                   </div>
 
                   {/* Rationale */}
@@ -1426,15 +1452,27 @@ Return ONLY valid JSON:
                     <p className="display-font text-stone-700 text-[14px] leading-relaxed">{goodwillRec.rationale}</p>
                   </div>
 
-                  {/* Script */}
-                  <div className="px-5 pt-3 pb-5">
-                    <div className="mono-font text-xs tracking-widest text-stone-400 mb-3">AGENT SCRIPT</div>
-                    <div className="border border-stone-200 bg-white p-4">
-                      {goodwillRec.script.split('\n\n').map((para, i) => (
-                        <p key={i} className={`display-font text-stone-800 text-[14px] leading-relaxed ${i > 0 ? 'mt-3' : ''}`}>{para}</p>
-                      ))}
+                  {/* Script — only shown when goodwill is actually recommended */}
+                  {goodwillRec.recommended && goodwillRec.script && (
+                    <div className="px-5 pt-3 pb-5">
+                      <div className="mono-font text-xs tracking-widest text-stone-400 mb-3">AGENT SCRIPT</div>
+                      <div className="border border-stone-200 bg-white p-4">
+                        {goodwillRec.script.split('\n\n').map((para, i) => (
+                          <p key={i} className={`display-font text-stone-800 text-[14px] leading-relaxed ${i > 0 ? 'mt-3' : ''}`}>{para}</p>
+                        ))}
+                      </div>
                     </div>
-                  </div>
+                  )}
+
+                  {/* NOT RECOMMENDED — redirect to formal dispute */}
+                  {!goodwillRec.recommended && (
+                    <div className="px-5 pt-2 pb-5">
+                      <div className="flex items-center gap-2 text-stone-500">
+                        <ArrowRight className="w-3.5 h-3.5 flex-shrink-0" />
+                        <p className="mono-font text-xs tracking-wide">Proceed with formal chargeback filing — use Steps 01–04 above.</p>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1587,7 +1625,7 @@ Return ONLY valid JSON:
                                     <button onClick={() => markProvCredit(o.id)} className="mono-font text-[10px] px-1.5 py-0.5 border border-blue-700 text-blue-700 hover:bg-blue-50 transition-colors">PC</button>
                                   )}
                                 </div>
-                                <button onClick={() => startEdit(o)} className="mono-font text-[10px] text-stone-300 hover:text-stone-700 transition-colors text-center" title="Edit row">✏</button>
+                                <button onClick={() => startEdit(o)} className="text-stone-500 hover:text-stone-900 transition-colors" title="Edit row"><Pencil className="w-3.5 h-3.5" /></button>
                               </div>
                             )}
 
