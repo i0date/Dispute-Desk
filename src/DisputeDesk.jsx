@@ -22,6 +22,16 @@ class ErrorBoundary extends React.Component {
   }
 }
 
+// ─── Compliance threshold defaults ────────────────────────────────────────────
+const DEFAULT_SETTINGS = {
+  smallDollarThreshold: 50,      // write-off below this amount
+  sarThreshold:         5000,    // SAR flag above this amount
+  fraudWindowDays:      120,     // fraud filing window (days from txn)
+  consumerWindowDays:   120,     // consumer filing window (days from expected delivery)
+  absoluteCapDays:      540,     // absolute filing cap (days from txn)
+  pcMilestones:         [10, 45, 90], // provisional credit deadline milestones (business days)
+}
+
 // ─── DFA integration helpers ──────────────────────────────────────────────────
 
 // Estimate DFA funding grade from reason code + amount (no behavioral signals in tracker)
@@ -285,6 +295,17 @@ export default function DisputeDesk() {
     localStorage.setItem('dispute_desk_outcomes', JSON.stringify(outcomes))
   }, [outcomes])
 
+  // ── Compliance settings — persisted ───────────────────────────────────────
+  const [settings, setSettings] = useState(() => {
+    try { return { ...DEFAULT_SETTINGS, ...JSON.parse(localStorage.getItem('dd_settings') || '{}') } } catch { return { ...DEFAULT_SETTINGS } }
+  })
+  useEffect(() => {
+    try { localStorage.setItem('dd_settings', JSON.stringify(settings)) } catch {}
+  }, [settings])
+  const [showSettings, setShowSettings] = useState(false)
+  const updateSetting = (key, val) => setSettings(prev => ({ ...prev, [key]: val }))
+  const resetSettings = () => { setSettings({ ...DEFAULT_SETTINGS }); try { localStorage.removeItem('dd_settings') } catch {} }
+
   const toggleCheck = (key) => setChecked(prev => ({ ...prev, [key]: !prev[key] }))
 
   const computeDaysSince = (dateStr) => {
@@ -300,15 +321,17 @@ export default function DisputeDesk() {
     if (txnDays === null && expectedDays === null) return null
     const baseline = (!isFraud && expectedDays !== null) ? expectedDays : txnDays
     const cap      = txnDays
+    const fw = isFraud ? settings.fraudWindowDays : settings.consumerWindowDays
+    const warnAt = Math.round(fw * 0.83)   // warn at ~83% of window
     if (isFraud) {
-      if (cap > 120) return { status: 'expired', text: `${cap} days since transaction — past 120-day fraud filing window`, color: 'red' }
-      if (cap > 100) return { status: 'warning', text: `${cap} days since transaction — only ${120 - cap} days remaining`, color: 'amber' }
-      return { status: 'ok', text: `${cap} days since transaction — within 120-day fraud filing window`, color: 'green' }
+      if (cap > fw)     return { status: 'expired', text: `${cap} days since transaction — past ${fw}-day fraud filing window`, color: 'red' }
+      if (cap > warnAt) return { status: 'warning', text: `${cap} days since transaction — only ${fw - cap} days remaining`, color: 'amber' }
+      return { status: 'ok', text: `${cap} days since transaction — within ${fw}-day fraud filing window`, color: 'green' }
     }
-    if (cap !== null && cap > 540) return { status: 'expired', text: `Past 540-day absolute cap (${cap} days since transaction)`, color: 'red' }
-    if (baseline > 120) return { status: 'late', text: `${baseline} days past baseline date — outside 120-day standard window`, color: 'red' }
-    if (baseline > 100) return { status: 'warning', text: `${baseline} days elapsed — only ${120 - baseline} days remaining`, color: 'amber' }
-    return { status: 'ok', text: `${baseline} days elapsed — within 120-day filing window`, color: 'green' }
+    if (cap !== null && cap > settings.absoluteCapDays) return { status: 'expired', text: `Past ${settings.absoluteCapDays}-day absolute cap (${cap} days since transaction)`, color: 'red' }
+    if (baseline > fw)     return { status: 'late',    text: `${baseline} days past baseline date — outside ${fw}-day standard window`, color: 'red' }
+    if (baseline > warnAt) return { status: 'warning', text: `${baseline} days elapsed — only ${fw - baseline} days remaining`, color: 'amber' }
+    return { status: 'ok', text: `${baseline} days elapsed — within ${fw}-day filing window`, color: 'green' }
   }
 
   // ─── Visa reason codes prompt section ───────────────────────────────────────
@@ -743,7 +766,7 @@ Return ONLY valid JSON:
   const isPartialDispute   = disputedAmount && parseFloat(disputedAmount) > 0 && disputedAmount !== amount
   const effectiveAmount    = isPartialDispute ? disputedAmount : amount
   const effectiveAmtNum    = parseFloat(effectiveAmount) || 0
-  const smallDollar        = effectiveAmtNum > 0 && effectiveAmtNum < 50
+  const smallDollar        = effectiveAmtNum > 0 && effectiveAmtNum < settings.smallDollarThreshold
 
   // Goodwill recommendation — only set when goodwill is actually the recommended path
   let goodwillRec = null
@@ -756,7 +779,7 @@ Return ONLY valid JSON:
         goodwillRec = {
           recommended: true, type: 'WRITE-OFF RECOMMENDED',
           typeColor: 'bg-amber-800 text-amber-50',
-          rationale: `At ${amtStr}${partialNote}, investigation and network fees may exceed recovery. A direct courtesy credit is the most efficient resolution.`,
+          rationale: `At ${amtStr}${partialNote}, investigation and network fees may exceed recovery (write-off threshold: $${settings.smallDollarThreshold}). A direct courtesy credit is the most efficient resolution.`,
           script: `Hi [Cardholder name],\n\nI've reviewed your dispute regarding ${merchantStr} for ${amtStr}. Given the amount, I'd like to resolve this right away by applying a one-time courtesy credit of ${amtStr} to your account — no formal chargeback required. This will appear within 3-5 business days.\n\nShall I go ahead and apply that credit now?`,
         }
       } else if (result.goodwill_outreach_required) {
@@ -785,6 +808,43 @@ Return ONLY valid JSON:
   const withdrawnCount  = visibleOutcomes.filter(o => o.status === 'withdrawn').length
   const resolvedCount   = wonCount + lostCount + withdrawnCount
   const winRate         = resolvedCount > 0 ? Math.round((wonCount / resolvedCount) * 100) : null
+
+  // Analytics — derived from visibleOutcomes
+  const [showAnalytics, setShowAnalytics] = useState(false)
+  const analytics = React.useMemo(() => {
+    const resolved = visibleOutcomes.filter(o => o.status === 'won' || o.status === 'lost')
+    // by network
+    const byNetwork = {}
+    resolved.forEach(o => {
+      const net = o.network || '—'
+      if (!byNetwork[net]) byNetwork[net] = { won: 0, total: 0 }
+      byNetwork[net].total++
+      if (o.status === 'won') byNetwork[net].won++
+    })
+    // by reason code (top 6)
+    const byCode = {}
+    resolved.forEach(o => {
+      const code = (o.reasonCode || '—').split(/[\s–—]/)[0].trim()
+      if (!byCode[code]) byCode[code] = { won: 0, total: 0 }
+      byCode[code].total++
+      if (o.status === 'won') byCode[code].won++
+    })
+    const topCodes = Object.entries(byCode).sort((a, b) => b[1].total - a[1].total).slice(0, 6)
+    // weekly trend (last 8 weeks)
+    const weeks = []
+    for (let w = 7; w >= 0; w--) {
+      const from = new Date(Date.now() - (w + 1) * 7 * 24 * 60 * 60 * 1000)
+      const to   = new Date(Date.now() - w * 7 * 24 * 60 * 60 * 1000)
+      const wk   = visibleOutcomes.filter(o => { const d = new Date(o.date); return d >= from && d < to })
+      const wWon = wk.filter(o => o.status === 'won').length
+      const wRes = wk.filter(o => o.status === 'won' || o.status === 'lost').length
+      weeks.push({ label: `W${8 - w}`, total: wk.length, won: wWon, resolved: wRes, rate: wRes > 0 ? Math.round(wWon / wRes * 100) : null })
+    }
+    // avg resolution time
+    const times = visibleOutcomes.filter(o => o.resolvedDate && o.date).map(o => Math.round((new Date(o.resolvedDate) - new Date(o.date)) / (1000 * 60 * 60 * 24)))
+    const avgDays = times.length > 0 ? Math.round(times.reduce((s, t) => s + t, 0) / times.length) : null
+    return { byNetwork, topCodes, weeks, avgDays, resolvedCount: resolved.length }
+  }, [visibleOutcomes])
 
   const impactStyle = (impact) => {
     if (impact === 'required')    return 'text-stone-900'
@@ -1069,7 +1129,7 @@ Return ONLY valid JSON:
                 )}
 
                 {/* SAR / STR reminder */}
-                {isFraud && effectiveAmtNum >= 5000 && (
+                {isFraud && effectiveAmtNum >= settings.sarThreshold && (
                   <div className="border-l-4 border-red-800 bg-red-50 p-5">
                     <div className="mono-font text-xs tracking-widest text-red-900 mb-2">⚠ SAR / STR REVIEW REQUIRED</div>
                     <p className="display-font text-stone-900 text-[15px] leading-relaxed">
@@ -1533,14 +1593,63 @@ Return ONLY valid JSON:
           <>
             <div className="section-divider" />
             <div>
-              <div className="flex items-baseline gap-3 mb-2 flex-wrap">
+              <div className="flex items-center gap-3 mb-2 flex-wrap">
                 <span className="mono-font text-xs text-stone-500">07</span>
                 <h2 className="display-font font-semibold text-2xl text-stone-900" style={{ letterSpacing: '-0.01em' }}>Dispute Tracker</h2>
-                <span className="mono-font text-xs text-stone-400 ml-auto">60-DAY WINDOW · {visibleOutcomes.length} CASE{visibleOutcomes.length !== 1 ? 'S' : ''}</span>
+                <div className="flex items-center gap-3 ml-auto flex-wrap">
+                  <span className="mono-font text-xs text-stone-400">60-DAY WINDOW · {visibleOutcomes.length} CASE{visibleOutcomes.length !== 1 ? 'S' : ''}</span>
+                  <button onClick={() => setShowSettings(v => !v)} className={`mono-font text-[10px] tracking-widest px-2.5 py-1 border transition-colors ${showSettings ? 'border-stone-900 bg-stone-900 text-stone-50' : 'border-stone-300 text-stone-500 hover:border-stone-600 hover:text-stone-700'}`}>
+                    ⚙ THRESHOLDS
+                  </button>
+                </div>
               </div>
-              <p className="display-font text-stone-500 text-[15px] mb-6 ml-7" style={{ lineHeight: '1.5' }}>
+              <p className="display-font text-stone-500 text-[15px] mb-4 ml-7" style={{ lineHeight: '1.5' }}>
                 Mark outcomes as cases resolve. Track provisional credit deadlines. Export to CSV for reporting.
               </p>
+
+              {/* ── Compliance thresholds panel ── */}
+              {showSettings && (
+                <div className="border border-stone-400 mb-5" style={{ background: '#FAF7F1' }}>
+                  <div className="flex items-center justify-between px-4 py-2.5 border-b border-stone-200" style={{ background: '#EEE9E0' }}>
+                    <span className="mono-font text-[9px] tracking-widest text-stone-600">COMPLIANCE THRESHOLDS — INSTITUTION CONFIGURATION</span>
+                    <button onClick={resetSettings} className="mono-font text-[9px] tracking-widest text-stone-400 hover:text-stone-700 transition-colors">RESET DEFAULTS</button>
+                  </div>
+                  <div className="px-4 py-4 grid grid-cols-2 sm:grid-cols-3 gap-4">
+                    {[
+                      { key: 'smallDollarThreshold', label: 'WRITE-OFF THRESHOLD ($)', type: 'number', hint: 'Disputes below this amount trigger a write-off recommendation instead of formal dispute filing' },
+                      { key: 'sarThreshold',          label: 'SAR TRIGGER ($)',          type: 'number', hint: 'Fraud disputes at or above this amount display a SAR filing reminder' },
+                      { key: 'fraudWindowDays',       label: 'FRAUD WINDOW (DAYS)',       type: 'number', hint: 'Filing window for fraud disputes (Visa/MC standard: 120 days from transaction)' },
+                      { key: 'consumerWindowDays',    label: 'CONSUMER WINDOW (DAYS)',    type: 'number', hint: 'Filing window for consumer disputes (typically 120 days from expected delivery)' },
+                      { key: 'absoluteCapDays',       label: 'ABSOLUTE CAP (DAYS)',       type: 'number', hint: 'Hard cap on any filing, regardless of reason code (Visa: 540 days from transaction)' },
+                    ].map(({ key, label, type, hint }) => (
+                      <div key={key}>
+                        <label className="mono-font text-[9px] tracking-widest text-stone-500 block mb-1">{label}</label>
+                        <input
+                          type={type}
+                          value={settings[key]}
+                          onChange={e => updateSetting(key, type === 'number' ? parseFloat(e.target.value) || 0 : e.target.value)}
+                          className="input-field"
+                          style={{ fontSize: '13px', padding: '7px 10px' }}
+                        />
+                        <p className="display-font text-[11px] text-stone-400 mt-1 leading-snug italic">{hint}</p>
+                      </div>
+                    ))}
+                    <div>
+                      <label className="mono-font text-[9px] tracking-widest text-stone-500 block mb-1">PC MILESTONES (BUSINESS DAYS)</label>
+                      <div className="flex gap-2">
+                        {settings.pcMilestones.map((m, i) => (
+                          <input key={i} type="number" value={m}
+                            onChange={e => updateSetting('pcMilestones', settings.pcMilestones.map((v, j) => j === i ? parseInt(e.target.value) || v : v))}
+                            className="input-field"
+                            style={{ fontSize: '13px', padding: '7px 10px', textAlign: 'center' }}
+                          />
+                        ))}
+                      </div>
+                      <p className="display-font text-[11px] text-stone-400 mt-1 leading-snug italic">Three milestone deadlines (in business days) shown on the PC countdown row</p>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Stats */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
@@ -1558,6 +1667,105 @@ Return ONLY valid JSON:
                 ))}
               </div>
 
+              {/* ── Analytics panel ── */}
+              {analytics.resolvedCount >= 2 && (
+                <div className="mb-5">
+                  <button
+                    onClick={() => setShowAnalytics(v => !v)}
+                    className="w-full flex items-center justify-between px-4 py-2.5 border border-stone-300 mono-font text-[10px] tracking-widest text-stone-500 hover:border-stone-500 transition-colors"
+                    style={{ background: '#EEE9E0' }}
+                  >
+                    <span>OUTCOME ANALYTICS ({analytics.resolvedCount} RESOLVED CASES)</span>
+                    <span>{showAnalytics ? '▲' : '▼'}</span>
+                  </button>
+                  {showAnalytics && (
+                    <div className="border border-t-0 border-stone-300 p-4 space-y-5" style={{ background: '#FAF7F1' }}>
+
+                      {/* Network breakdown */}
+                      {Object.keys(analytics.byNetwork).length > 0 && (
+                        <div>
+                          <div className="mono-font text-[9px] tracking-widest text-stone-400 mb-3">WIN RATE BY NETWORK</div>
+                          <div className="flex gap-6 flex-wrap">
+                            {Object.entries(analytics.byNetwork).map(([net, d]) => {
+                              const rate = Math.round(d.won / d.total * 100)
+                              return (
+                                <div key={net} className="flex items-center gap-3">
+                                  <span className="mono-font text-xs text-stone-600 w-8">{net}</span>
+                                  <div style={{ width: '120px', height: '6px', background: '#D4CCBC', borderRadius: '2px' }}>
+                                    <div style={{ height: '100%', width: `${rate}%`, background: rate >= 60 ? '#064e3b' : rate >= 40 ? '#92400e' : '#7f1d1d', borderRadius: '2px', transition: 'width 0.4s' }} />
+                                  </div>
+                                  <span className="mono-font text-xs font-medium text-stone-800">{rate}%</span>
+                                  <span className="mono-font text-[10px] text-stone-400">{d.won}/{d.total}</span>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Reason code breakdown */}
+                      {analytics.topCodes.length > 0 && (
+                        <div>
+                          <div className="mono-font text-[9px] tracking-widest text-stone-400 mb-3">WIN RATE BY REASON CODE (TOP {analytics.topCodes.length})</div>
+                          <div className="space-y-2">
+                            {analytics.topCodes.map(([code, d]) => {
+                              const rate = Math.round(d.won / d.total * 100)
+                              return (
+                                <div key={code} className="flex items-center gap-3">
+                                  <span className="mono-font text-[11px] text-stone-600 w-10 shrink-0">{code}</span>
+                                  <div style={{ flex: 1, height: '6px', background: '#D4CCBC', borderRadius: '2px', maxWidth: '160px' }}>
+                                    <div style={{ height: '100%', width: `${rate}%`, background: rate >= 60 ? '#064e3b' : rate >= 40 ? '#92400e' : '#7f1d1d', borderRadius: '2px', transition: 'width 0.4s' }} />
+                                  </div>
+                                  <span className="mono-font text-[11px] font-medium text-stone-800 w-8">{rate}%</span>
+                                  <span className="mono-font text-[10px] text-stone-400">{d.won}W / {d.total - d.won}L</span>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Weekly filing trend */}
+                      <div>
+                        <div className="mono-font text-[9px] tracking-widest text-stone-400 mb-3">WEEKLY FILING TREND (LAST 8 WEEKS)</div>
+                        <div className="flex items-end gap-1.5">
+                          {analytics.weeks.map((w, i) => {
+                            const barH = w.total > 0 ? Math.max(8, Math.round(w.total / Math.max(...analytics.weeks.map(x => x.total), 1) * 48)) : 2
+                            const isLast = i === analytics.weeks.length - 1
+                            return (
+                              <div key={w.label} className="flex flex-col items-center gap-1" style={{ flex: 1 }}>
+                                <div className="mono-font text-[8px] text-stone-400">{w.total > 0 ? w.total : ''}</div>
+                                <div style={{ width: '100%', height: `${barH}px`, background: isLast ? '#1A1814' : '#D4CCBC', minHeight: '2px' }} />
+                                <div className="mono-font text-[8px] text-stone-400">{w.label}</div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Summary row */}
+                      <div className="flex flex-wrap gap-6 pt-2 border-t border-stone-200">
+                        {analytics.avgDays !== null && (
+                          <div>
+                            <div className="mono-font text-[9px] tracking-widest text-stone-400 mb-0.5">AVG RESOLUTION</div>
+                            <div className="display-font font-semibold text-stone-900" style={{ fontSize: '20px' }}>{analytics.avgDays} days</div>
+                          </div>
+                        )}
+                        <div>
+                          <div className="mono-font text-[9px] tracking-widest text-stone-400 mb-0.5">OVERALL WIN RATE</div>
+                          <div className="display-font font-semibold text-stone-900" style={{ fontSize: '20px' }}>{winRate !== null ? `${winRate}%` : '—'}</div>
+                        </div>
+                        <div>
+                          <div className="mono-font text-[9px] tracking-widest text-stone-400 mb-0.5">CASES RESOLVED</div>
+                          <div className="display-font font-semibold text-stone-900" style={{ fontSize: '20px' }}>{analytics.resolvedCount}</div>
+                        </div>
+                      </div>
+
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Case table */}
               <div className="border border-stone-200 overflow-hidden" style={{ background: '#FAF7F1' }}>
                 <div className="overflow-x-auto">
@@ -1570,9 +1778,10 @@ Return ONLY valid JSON:
                     </div>
                     <div style={{ maxHeight: '480px', overflowY: 'auto' }}>
                       {visibleOutcomes.map(o => {
-                        const pc10 = o.provCreditDate ? addBusinessDays(o.provCreditDate, 10) : null
-                        const pc45 = o.provCreditDate ? addBusinessDays(o.provCreditDate, 45) : null
-                        const pc90 = o.provCreditDate ? addBusinessDays(o.provCreditDate, 90) : null
+                        const [m0, m1, m2] = settings.pcMilestones
+                        const pc10 = o.provCreditDate ? addBusinessDays(o.provCreditDate, m0) : null
+                        const pc45 = o.provCreditDate ? addBusinessDays(o.provCreditDate, m1) : null
+                        const pc90 = o.provCreditDate ? addBusinessDays(o.provCreditDate, m2) : null
                         const now  = new Date()
                         const isEditing = editingRow === o.id
 
@@ -1689,7 +1898,7 @@ Return ONLY valid JSON:
                             {!isEditing && o.provCreditDate && (
                               <div className="px-4 pb-2 flex items-center gap-4 flex-wrap" style={{ background: '#EEF2FF' }}>
                                 <span className="mono-font text-[10px] text-blue-800 tracking-wider">PC ISSUED: {new Date(o.provCreditDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
-                                {[{ label: '10BD', date: pc10 }, { label: '45BD', date: pc45 }, { label: '90BD', date: pc90 }].map(({ label, date }) => {
+                                {[{ label: `${m0}BD`, date: pc10 }, { label: `${m1}BD`, date: pc45 }, { label: `${m2}BD`, date: pc90 }].map(({ label, date }) => {
                                   if (!date) return null
                                   const d = daysUntil(date)
                                   const past = d !== null && d < 0
