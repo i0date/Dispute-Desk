@@ -284,6 +284,8 @@ export default function DisputeDesk() {
   const [docRequestCopied, setDocRequestCopied]             = useState(false)
   const [goodwillCopied, setGoodwillCopied]                 = useState(false)
   const [disputedAmount, setDisputedAmount]                 = useState('')     // partial dispute amount (optional)
+  const [cardType, setCardType]                             = useState('credit') // 'credit' | 'debit'
+  const [sarDiscoveryDate, setSarDiscoveryDate]             = useState('')     // FI: date fraud was detected (for SAR deadline)
   const [editingRow, setEditingRow]                         = useState(null)   // id of row being edited
   const [editDraft, setEditDraft]                           = useState({})     // draft field values
 
@@ -870,6 +872,22 @@ Return ONLY valid JSON:
     ? Math.ceil((new Date(ceSarDeadline) - new Date()) / 86400000)
     : null
 
+  // ── FI SAR deadline (30 days from detection date, FinCEN / FINTRAC) ────────
+  const fiSarDeadlineRaw = sarDiscoveryDate
+    ? new Date(new Date(sarDiscoveryDate).getTime() + 30 * 86400000)
+    : null
+  const fiSarDeadline  = fiSarDeadlineRaw ? fiSarDeadlineRaw.toLocaleDateString('en-CA') : null
+  const fiSarDaysLeft  = fiSarDeadlineRaw ? Math.ceil((fiSarDeadlineRaw - new Date()) / 86400000) : null
+
+  // ── Reg E provisional credit deadline (10 BD from when dispute is received) ──
+  // Used when cardType === 'debit' and an analysis has been run
+  const regEPcDue = (cardType === 'debit' && result)
+    ? addBusinessDays(new Date().toISOString(), 10).toLocaleDateString('en-CA')
+    : null
+  const regEInvDue = (cardType === 'debit' && result)
+    ? addBusinessDays(new Date().toISOString(), 45).toLocaleDateString('en-CA')
+    : null
+
   // ── analyseCE — crypto exchange incident analysis ─────────────────────────
   const analyseCE = async () => {
     if (!ceComplaint.trim()) { setCeError('Customer complaint is required.'); return }
@@ -1026,13 +1044,20 @@ Return ONLY valid JSON, no markdown:
   } catch(e) { console.error('[DD] goodwillRec crash:', e) }
 
   // Outcome tracker: 60-day window only
+  // Lifecycle stages: pending → filed → representment → pre_arb → won | lost | withdrawn
+  const LIFECYCLE_IN_PROGRESS = new Set(['filed', 'representment', 'pre_arb'])
   const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000)
   const visibleOutcomes = outcomes.filter(o => new Date(o.date) > sixtyDaysAgo)
   const wonCount        = visibleOutcomes.filter(o => o.status === 'won').length
   const lostCount       = visibleOutcomes.filter(o => o.status === 'lost').length
   const withdrawnCount  = visibleOutcomes.filter(o => o.status === 'withdrawn').length
+  const inProgressCount = visibleOutcomes.filter(o => LIFECYCLE_IN_PROGRESS.has(o.status)).length
   const resolvedCount   = wonCount + lostCount + withdrawnCount
   const winRate         = resolvedCount > 0 ? Math.round((wonCount / resolvedCount) * 100) : null
+
+  // Advance a case to the next lifecycle stage
+  const advanceStage = (id, newStatus) =>
+    setOutcomes(prev => prev.map(o => o.id === id ? { ...o, status: newStatus } : o))
 
   // Analytics — derived from visibleOutcomes
   const [showAnalytics, setShowAnalytics] = useState(false)
@@ -1351,22 +1376,46 @@ Return ONLY valid JSON, no markdown:
 
             <div className="space-y-5">
 
-              {/* Network selector */}
-              <div>
-                <label className="input-label">Card Network</label>
-                <div className="flex gap-0">
-                  <button
-                    onClick={() => setNetwork('visa')}
-                    className={`network-btn ${network === 'visa' ? 'active' : 'inactive'}`}
-                  >
-                    VISA
-                  </button>
-                  <button
-                    onClick={() => setNetwork('mastercard')}
-                    className={`network-btn ${network === 'mastercard' ? 'active' : 'inactive'}`}
-                  >
-                    MASTERCARD
-                  </button>
+              {/* Network + card type selectors */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="input-label">Card Network</label>
+                  <div className="flex gap-0">
+                    <button
+                      onClick={() => setNetwork('visa')}
+                      className={`network-btn ${network === 'visa' ? 'active' : 'inactive'}`}
+                    >
+                      VISA
+                    </button>
+                    <button
+                      onClick={() => setNetwork('mastercard')}
+                      className={`network-btn ${network === 'mastercard' ? 'active' : 'inactive'}`}
+                    >
+                      MASTERCARD
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <label className="input-label">Card Type</label>
+                  <div className="flex gap-0">
+                    <button
+                      onClick={() => setCardType('credit')}
+                      className={`network-btn ${cardType === 'credit' ? 'active' : 'inactive'}`}
+                    >
+                      CREDIT
+                    </button>
+                    <button
+                      onClick={() => setCardType('debit')}
+                      className={`network-btn ${cardType === 'debit' ? 'active' : 'inactive'}`}
+                    >
+                      DEBIT
+                    </button>
+                  </div>
+                  {cardType === 'debit' && (
+                    <div className="mt-1.5 mono-font text-[10px] text-blue-800 tracking-wide">
+                      Reg E / EFTA applies — PC required within 10 business days
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -1423,6 +1472,21 @@ Return ONLY valid JSON, no markdown:
                 <div>
                   <label className="input-label">Expected Delivery (Optional)</label>
                   <input type="date" value={expectedDeliveryDate} onChange={e => setExpectedDeliveryDate(e.target.value)} className="input-field mono-font" style={{ fontSize: '13px' }} />
+                </div>
+              </div>
+
+              {/* SAR discovery date — optional, shows SAR deadline when filled */}
+              <div>
+                <label className="input-label">
+                  Date Fraud Detected / Reported <span className="mono-font text-[10px] text-stone-400 normal-case tracking-normal">(optional — enables SAR deadline tracking)</span>
+                </label>
+                <div className="flex items-center gap-3 flex-wrap">
+                  <input type="date" value={sarDiscoveryDate} onChange={e => setSarDiscoveryDate(e.target.value)} className="input-field mono-font" style={{ fontSize: '13px', maxWidth: '200px' }} />
+                  {fiSarDeadline && (
+                    <div className={`mono-font text-xs px-2 py-1 ${fiSarDaysLeft !== null && fiSarDaysLeft <= 7 ? 'bg-red-900 text-red-50' : fiSarDaysLeft !== null && fiSarDaysLeft <= 14 ? 'bg-amber-800 text-amber-50' : 'bg-stone-700 text-stone-50'}`}>
+                      SAR deadline: {fiSarDeadline} · {fiSarDaysLeft !== null ? `${fiSarDaysLeft}d remaining` : ''}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -1735,13 +1799,74 @@ Return ONLY valid JSON, no markdown:
                   </div>
                 )}
 
-                {/* SAR / STR reminder */}
+                {/* SAR / STR reminder — with deadline countdown when discovery date is set */}
                 {isFraud && effectiveAmtNum >= settings.sarThreshold && (
-                  <div className="border-l-4 border-red-800 bg-red-50 p-5">
-                    <div className="mono-font text-xs tracking-widest text-red-900 mb-2">⚠ SAR / STR REVIEW REQUIRED</div>
+                  <div className="border-l-4 border-red-800 bg-red-50 p-5 space-y-3">
+                    <div className="mono-font text-xs tracking-widest text-red-900">⚠ SAR / STR REVIEW REQUIRED</div>
                     <p className="display-font text-stone-900 text-[15px] leading-relaxed">
-                      This fraud case meets or exceeds the $5,000 threshold. Review for <strong>Suspicious Activity Report</strong> (SAR / FinCEN) or <strong>Suspicious Transaction Report</strong> (STR / FINTRAC) filing requirements per your institution's BSA/AML policy. Do not delay SAR filing beyond 30 days of detection.
+                      This fraud case meets or exceeds the ${settings.sarThreshold.toLocaleString()} threshold. Review for <strong>Suspicious Activity Report</strong> (SAR / FinCEN) or <strong>Suspicious Transaction Report</strong> (STR / FINTRAC) filing requirements per your institution's BSA/AML policy.
                     </p>
+                    {fiSarDeadline ? (
+                      <div className={`flex items-center gap-3 mono-font text-xs px-3 py-2 ${fiSarDaysLeft !== null && fiSarDaysLeft <= 7 ? 'bg-red-900 text-red-50' : fiSarDaysLeft !== null && fiSarDaysLeft <= 14 ? 'bg-amber-800 text-amber-50' : 'bg-stone-800 text-stone-100'}`}>
+                        <span>SAR DEADLINE: {fiSarDeadline}</span>
+                        {fiSarDaysLeft !== null && (
+                          <span className="font-bold">
+                            {fiSarDaysLeft > 0 ? `${fiSarDaysLeft} DAYS REMAINING` : fiSarDaysLeft === 0 ? 'DUE TODAY' : `${Math.abs(fiSarDaysLeft)} DAYS OVERDUE`}
+                          </span>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="mono-font text-[11px] text-red-700 italic">
+                        ↑ Enter the date fraud was detected in the intake form above to track the 30-day SAR filing deadline.
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Reg E / EFTA compliance block — debit cards only */}
+                {cardType === 'debit' && (
+                  <div className="border-l-4 p-5 space-y-2" style={{ borderColor: '#1d4ed8', background: '#eff6ff' }}>
+                    <div className="mono-font text-xs tracking-widest" style={{ color: '#1e3a8a' }}>REG E / EFTA — DEBIT CARD</div>
+                    <p className="display-font text-stone-900 text-[15px] leading-relaxed">
+                      This is a debit card dispute. <strong>Regulation E</strong> requires the financial institution to issue provisional credit within <strong>10 business days</strong> of receiving the claim (5 business days for established accounts). Investigation must be completed within <strong>45 business days</strong> (20 business days for point-of-sale or foreign-initiated transactions).
+                    </p>
+                    {regEPcDue && (
+                      <div className="flex flex-wrap gap-4 pt-1">
+                        <div className="mono-font text-xs" style={{ color: '#1e40af' }}>
+                          <span className="text-stone-500">PC DUE BY: </span><span className="font-bold">{regEPcDue}</span>
+                        </div>
+                        <div className="mono-font text-xs" style={{ color: '#1e40af' }}>
+                          <span className="text-stone-500">INVESTIGATION DUE: </span><span className="font-bold">{regEInvDue}</span>
+                        </div>
+                      </div>
+                    )}
+                    <p className="mono-font text-[10px] text-stone-500 italic pt-1">
+                      Note: these dates are calculated from today (date of analysis). Adjust if claim was received on a different date.
+                    </p>
+                  </div>
+                )}
+
+                {/* Visa CE3.0 warning — 10.4 Card-Not-Present disputes */}
+                {result?.recommended_reason_code?.startsWith('10.4') && network === 'visa' && (
+                  <div className="border-l-4 p-5 space-y-3" style={{ borderColor: '#7e22ce', background: '#faf5ff' }}>
+                    <div className="mono-font text-xs tracking-widest" style={{ color: '#581c87' }}>⚠ VISA COMPELLING EVIDENCE 3.0 — VERIFY BEFORE FILING</div>
+                    <p className="display-font text-stone-900 text-[15px] leading-relaxed">
+                      <strong>Visa CE3.0</strong> (active since April 2023) allows merchants to defeat 10.4 CNP fraud chargebacks if they can show two or more prior <em>undisputed</em> transactions from the same device fingerprint and/or IP address within the 120 days preceding this transaction. If the merchant is CE3.0-enabled and has that evidence on file, your chargeback will be reversed.
+                    </p>
+                    <div className="space-y-1.5">
+                      <div className="mono-font text-xs tracking-widest text-stone-500 mb-2">CHECK BEFORE FILING:</div>
+                      {[
+                        'Is this cardholder a repeat customer at this merchant? If yes, CE3.0 risk is high.',
+                        'Pull IP address and device fingerprint from this transaction — do they match prior undisputed orders?',
+                        'Ask cardholder: have they ever shopped at this merchant before, even successfully?',
+                        'If prior undisputed transactions exist on the same device/IP, consider downgrading to 10.5 (VFMP) or escalating to fraud ops for further review before filing.',
+                      ].map((item, i) => (
+                        <div key={i} className="display-font text-[14px] flex gap-2 items-start leading-snug" style={{ color: '#4c1d95' }}>
+                          <span className="shrink-0 mt-0.5" style={{ color: '#9333ea' }}>→</span>
+                          <span>{item}</span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
 
@@ -2262,10 +2387,10 @@ Return ONLY valid JSON, no markdown:
               {/* Stats */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
                 {[
-                  { label: 'TOTAL (60 DAYS)', value: visibleOutcomes.length,                    sub: 'cases analyzed'           },
-                  { label: 'WIN RATE',         value: winRate !== null ? `${winRate}%` : '—',   sub: `${resolvedCount} resolved` },
-                  { label: 'WON',              value: wonCount,                                  sub: 'disputes upheld'          },
-                  { label: 'LOST / WITHDRAWN', value: `${lostCount} / ${withdrawnCount}`,        sub: 'closed against'           },
+                  { label: 'TOTAL (60 DAYS)', value: visibleOutcomes.length,                         sub: 'cases analyzed'                            },
+                  { label: 'IN PROGRESS',      value: inProgressCount,                               sub: `filed / representment / pre-arb`          },
+                  { label: 'WIN RATE',         value: winRate !== null ? `${winRate}%` : '—',        sub: `${resolvedCount} resolved`                 },
+                  { label: 'WON / LOST',       value: `${wonCount} / ${lostCount}`,                  sub: `${withdrawnCount} withdrawn`               },
                 ].map(s => (
                   <div key={s.label} className="border border-stone-200 p-4" style={{ background: '#FAF7F1' }}>
                     <div className="mono-font text-xs tracking-widest text-stone-400 mb-1">{s.label}</div>
@@ -2435,7 +2560,10 @@ Return ONLY valid JSON, no markdown:
                                       onChange={e => markCaseOutcome(o.id, e.target.value)}
                                       style={{ fontSize: '13px', padding: '8px 10px' }}
                                     >
-                                      <option value="pending">Pending</option>
+                                      <option value="pending">Pending — not yet filed</option>
+                                      <option value="filed">Filed — submitted to network</option>
+                                      <option value="representment">Representment received — merchant responded</option>
+                                      <option value="pre_arb">Pre-arb filed — awaiting decision</option>
                                       <option value="won">Won</option>
                                       <option value="lost">Lost</option>
                                       <option value="withdrawn">Withdrawn</option>
@@ -2477,16 +2605,42 @@ Return ONLY valid JSON, no markdown:
                                     : <span className="text-stone-300 mono-font text-[10px]">—</span>
                                 })()}
                                 <div className="flex gap-1 flex-wrap items-center">
-                                  {o.status === 'pending' ? (
+                                  {/* ── Lifecycle stage buttons ───────────────── */}
+                                  {o.status === 'pending' && (
                                     <>
+                                      <button onClick={() => advanceStage(o.id, 'filed')} title="Mark as filed with network" className="mono-font text-[10px] px-1.5 py-0.5 border border-stone-600 text-stone-600 hover:bg-stone-100 transition-colors">FILED</button>
                                       <button onClick={() => markCaseOutcome(o.id, 'won')} className="mono-font text-[10px] px-1.5 py-0.5 border border-emerald-700 text-emerald-700 hover:bg-emerald-50 transition-colors">WON</button>
                                       <button onClick={() => markCaseOutcome(o.id, 'lost')} className="mono-font text-[10px] px-1.5 py-0.5 border border-red-700 text-red-700 hover:bg-red-50 transition-colors">LOST</button>
                                       <button onClick={() => markCaseOutcome(o.id, 'withdrawn')} className="mono-font text-[10px] px-1.5 py-0.5 border border-stone-400 text-stone-500 hover:bg-stone-100 transition-colors">WD</button>
-                                      {!o.provCreditDate && (
-                                        <button onClick={() => markProvCredit(o.id)} className="mono-font text-[10px] px-1.5 py-0.5 border border-blue-700 text-blue-700 hover:bg-blue-50 transition-colors">PC</button>
-                                      )}
                                     </>
-                                  ) : (
+                                  )}
+                                  {o.status === 'filed' && (
+                                    <>
+                                      <span className="mono-font text-[10px] px-1.5 py-0.5 bg-stone-700 text-stone-50">FILED</span>
+                                      <button onClick={() => advanceStage(o.id, 'representment')} title="Merchant representment received" className="mono-font text-[10px] px-1.5 py-0.5 border border-amber-700 text-amber-700 hover:bg-amber-50 transition-colors">REPMT</button>
+                                      <button onClick={() => markCaseOutcome(o.id, 'won')} className="mono-font text-[10px] px-1.5 py-0.5 border border-emerald-700 text-emerald-700 hover:bg-emerald-50 transition-colors">WON</button>
+                                      <button onClick={() => markCaseOutcome(o.id, 'lost')} className="mono-font text-[10px] px-1.5 py-0.5 border border-red-700 text-red-700 hover:bg-red-50 transition-colors">LOST</button>
+                                      <button onClick={() => revertCase(o.id)} className="mono-font text-[10px] text-stone-400 hover:text-stone-700 transition-colors px-1" title="Revert">↩</button>
+                                    </>
+                                  )}
+                                  {o.status === 'representment' && (
+                                    <>
+                                      <span className="mono-font text-[10px] px-1.5 py-0.5 bg-amber-800 text-amber-50">REPMT RCV'D</span>
+                                      <button onClick={() => advanceStage(o.id, 'pre_arb')} title="File pre-arbitration" className="mono-font text-[10px] px-1.5 py-0.5 border border-purple-700 text-purple-700 hover:bg-purple-50 transition-colors">PRE-ARB</button>
+                                      <button onClick={() => markCaseOutcome(o.id, 'won')} className="mono-font text-[10px] px-1.5 py-0.5 border border-emerald-700 text-emerald-700 hover:bg-emerald-50 transition-colors">WON</button>
+                                      <button onClick={() => markCaseOutcome(o.id, 'lost')} className="mono-font text-[10px] px-1.5 py-0.5 border border-red-700 text-red-700 hover:bg-red-50 transition-colors">LOST</button>
+                                      <button onClick={() => revertCase(o.id)} className="mono-font text-[10px] text-stone-400 hover:text-stone-700 transition-colors px-1" title="Revert">↩</button>
+                                    </>
+                                  )}
+                                  {o.status === 'pre_arb' && (
+                                    <>
+                                      <span className="mono-font text-[10px] px-1.5 py-0.5 bg-purple-900 text-purple-50">PRE-ARB FILED</span>
+                                      <button onClick={() => markCaseOutcome(o.id, 'won')} className="mono-font text-[10px] px-1.5 py-0.5 border border-emerald-700 text-emerald-700 hover:bg-emerald-50 transition-colors">WON</button>
+                                      <button onClick={() => markCaseOutcome(o.id, 'lost')} className="mono-font text-[10px] px-1.5 py-0.5 border border-red-700 text-red-700 hover:bg-red-50 transition-colors">LOST</button>
+                                      <button onClick={() => revertCase(o.id)} className="mono-font text-[10px] text-stone-400 hover:text-stone-700 transition-colors px-1" title="Revert">↩</button>
+                                    </>
+                                  )}
+                                  {(o.status === 'won' || o.status === 'lost' || o.status === 'withdrawn') && (
                                     <div className="flex items-center gap-1">
                                       <span className={`mono-font text-[10px] px-1.5 py-0.5 ${o.status === 'won' ? 'bg-emerald-900 text-emerald-50' : o.status === 'lost' ? 'bg-red-900 text-red-50' : 'bg-stone-600 text-stone-50'}`}>
                                         {o.status.toUpperCase()}
@@ -2494,7 +2648,8 @@ Return ONLY valid JSON, no markdown:
                                       <button onClick={() => revertCase(o.id)} className="mono-font text-[10px] text-stone-400 hover:text-stone-700 transition-colors px-1" title="Re-mark">↩</button>
                                     </div>
                                   )}
-                                  {o.status !== 'pending' && !o.provCreditDate && (
+                                  {/* PC button — available on all non-terminal stages */}
+                                  {!o.provCreditDate && o.status !== 'withdrawn' && (
                                     <button onClick={() => markProvCredit(o.id)} className="mono-font text-[10px] px-1.5 py-0.5 border border-blue-700 text-blue-700 hover:bg-blue-50 transition-colors">PC</button>
                                   )}
                                 </div>
