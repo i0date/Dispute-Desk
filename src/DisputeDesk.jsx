@@ -289,34 +289,19 @@ export default function DisputeDesk() {
   const [editingRow, setEditingRow]                         = useState(null)   // id of row being edited
   const [editDraft, setEditDraft]                           = useState({})     // draft field values
 
-  // ── Platform mode ─────────────────────────────────────────────────────────
-  const [platformMode, setPlatformMode]                     = useState('fi')   // 'fi' | 'ce'
+  // ── 3DS / authentication ──────────────────────────────────────────────────
+  const [threeDSStatus, setThreeDSStatus]                   = useState('unknown') // 'not_attempted' | 'attempted_failed' | 'attempted_passed' | 'unknown'
 
-  // ── Crypto Exchange (CE) mode state ──────────────────────────────────────
-  const [ceExchange, setCeExchange]                         = useState('')
-  const [ceAsset, setCeAsset]                               = useState('')
-  const [ceChain, setCeChain]                               = useState('')
-  const [ceTxType, setCeTxType]                             = useState('')
-  const [ceAmount, setCeAmount]                             = useState('')
-  const [ceCurrency, setCeCurrency]                         = useState('USD')
-  const [ceTxDate, setCeTxDate]                             = useState('')
-  const [ceDestination, setCeDestination]                   = useState('')
-  const [ceDestType, setCeDestType]                         = useState('')
-  const [ceReceivingExchange, setCeReceivingExchange]       = useState('')
-  const [ceCompromiseVector, setCeCompromiseVector]         = useState('')
-  const [ceBlockchainTrace, setCeBlockchainTrace]           = useState('')
-  const [ceRecentAcctChanges, setCeRecentAcctChanges]       = useState('')
-  const [ceDeviceNew, setCeDeviceNew]                       = useState('')
-  const [cePriorClaims, setCePriorClaims]                   = useState('')
-  const [ceKycLevel, setCeKycLevel]                         = useState('')
-  const [ceRoutingCode, setCeRoutingCode]                   = useState('')   // from Triage handoff
-  const [ceCountry, setCeCountry]                           = useState('both')
-  const [ceComplaint, setCeComplaint]                       = useState('')
-  const [ceResult, setCeResult]                             = useState(null)
-  const [ceLoading, setCeLoading]                           = useState(false)
-  const [ceError, setCeError]                               = useState(null)
-  const [ceCopied, setCeCopied]                             = useState(false)
-  const [ceSarDeadlineDate, setCeSarDeadlineDate]           = useState('')   // date incident reported
+  // ── Pre-arb response drafter ──────────────────────────────────────────────
+  const [preArbDraft, setPreArbDraft]                       = useState(null)
+  const [preArbLoading, setPreArbLoading]                   = useState(false)
+  const [preArbError, setPreArbError]                       = useState(null)
+  const [preArbCopied, setPreArbCopied]                     = useState(false)
+  const [preArbTargetId, setPreArbTargetId]                 = useState(null) // tracker row ID
+  const [merchantRepNotes, setMerchantRepNotes]             = useState({}) // {[outcomeId]: string}
+
+  // ── Platform mode ─────────────────────────────────────────────────────────
+  // CE mode removed — DisputeDesk is FI-only; CE analysts use Triage end-to-end
 
   // ── Outcome tracking (60-day dispute log) ─────────────────────────────────
   const [outcomes, setOutcomes] = useState(() => {
@@ -372,22 +357,8 @@ export default function DisputeDesk() {
         if (n.includes('mastercard') || n.includes('mc')) setNetwork('mastercard')
         else if (n.includes('visa'))                       setNetwork('visa')
       }
-      // Auto-switch to CE mode if handoff is from CE triage
-      if (h.accountType === 'crypto_exchange') {
-        setPlatformMode('ce')
-        if (h.complaint)        setCeComplaint(h.complaint)
-        if (h.amount)           setCeAmount(h.amount)
-        if (h.currency)         setCeCurrency(h.currency)
-        if (h.transactionDate)  setCeTxDate(h.transactionDate)
-        if (h.merchant)         setCeExchange(h.merchant)   // CE: merchant = exchange/destination
-        if (h.routing)          setCeRoutingCode(h.routing)
-        // Parse asset from network field (e.g. "BTC (Bitcoin)")
-        if (h.network) {
-          const assetMatch = h.network.match(/^([A-Z]+)/)
-          if (assetMatch) setCeAsset(assetMatch[1])
-        }
-      } else {
-        // FI handoff — existing pre-fill
+      // FI handoff pre-fill
+      if (true) {
         if (h.merchant)         setMerchant(h.merchant)
         if (h.amount)           setAmount(h.amount)
         if (h.currency)         setCurrency(h.currency)
@@ -534,6 +505,8 @@ TRANSACTION DETAILS:
 - Transaction Date: ${transactionDate || 'Not provided'}
 - Expected Delivery/Service Date: ${expectedDeliveryDate || 'Not provided'}
 - Card Network: ${network === 'visa' ? 'Visa' : 'Mastercard'}
+- Card Type: ${cardType === 'debit' ? 'Debit (Reg E / EFTA)' : 'Credit (Reg Z / FCBA)'}
+- 3DS Status: ${threeDSStatus === 'not_attempted' ? 'Not attempted — supports fraud claim' : threeDSStatus === 'attempted_passed' ? 'Passed — liability may shift to issuer, review before filing' : threeDSStatus === 'attempted_failed' ? 'Attempted, authentication failed' : 'Unknown'}
 
 ${networkCodes}
 
@@ -802,6 +775,41 @@ Return ONLY valid JSON:
   const markProvCredit = (id) =>
     setOutcomes(prev => prev.map(o => o.id === id ? { ...o, provCreditDate: new Date().toISOString() } : o))
 
+  // ── Pre-arb response drafter ──────────────────────────────────────────────
+  const generatePreArbDraft = async (outcome) => {
+    setPreArbLoading(true); setPreArbError(null); setPreArbDraft(null); setPreArbTargetId(outcome.id)
+    const repNotes = merchantRepNotes[outcome.id] || ''
+    const prompt = `You are a senior disputes analyst at a financial institution. Generate a formal pre-arbitration rebuttal.
+
+CASE:
+- ID: ${outcome.id}  - Merchant: ${outcome.merchant || 'N/A'}  - Amount: ${outcome.amount || 'N/A'}
+- Network: ${(outcome.network || '').toUpperCase()}  - Reason Code: ${outcome.reasonCode || 'N/A'}
+- Reason: ${outcome.reasonTitle || 'N/A'}  - Stage: ${outcome.status}
+
+MERCHANT REPRESENTMENT:
+${repNotes || 'No notes provided.'}
+
+Return ONLY valid JSON:
+{
+  "summary": "2-sentence summary of issuer pre-arb position",
+  "rebuttal_points": ["Point addressing each merchant argument with evidence/rule cite", "..."],
+  "evidence_to_attach": ["Specific document to attach", "..."],
+  "formal_statement": "200-300 word formal pre-arb statement for network submission",
+  "filing_deadline_note": "Deadline and urgency note",
+  "win_assessment": "STRONG" | "MODERATE" | "WEAK",
+  "win_note": "1-2 sentences on success likelihood"
+}`
+    try {
+      const res = await fetch('/api/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 1500, messages: [{ role: 'user', content: prompt }] }) })
+      if (!res.ok) throw new Error('API ' + res.status)
+      const data = await res.json()
+      const text = data.content.filter(b => b.type === 'text').map(b => b.text).join('').replace(/```json|```/g, '').trim()
+      setPreArbDraft(JSON.parse(text))
+    } catch (e) { setPreArbError('Pre-arb draft failed: ' + e.message) }
+    finally { setPreArbLoading(false) }
+  }
+
   // ── Outcome tracker helpers ────────────────────────────────────────────────
   const markCaseOutcome = (id, status) =>
     setOutcomes(prev => prev.map(o => o.id === id ? { ...o, status, resolvedDate: new Date().toISOString() } : o))
@@ -857,17 +865,6 @@ Return ONLY valid JSON:
     URL.revokeObjectURL(url)
   }
 
-  // ── CE computed values ────────────────────────────────────────────────────
-  const isCE           = platformMode === 'ce'
-  const ceDaysSince    = ceTxDate ? Math.floor((Date.now() - new Date(ceTxDate).getTime()) / 86400000) : null
-  const ceAmountNum    = parseFloat(ceAmount) || 0
-  const ceSarFlagUS    = ceAmountNum >= 5000  && (ceCountry === 'us'   || ceCountry === 'both') && ceCurrency === 'USD'
-  const ceStrFlagCA    = ceAmountNum >= 10000 && (ceCountry === 'ca'   || ceCountry === 'both') && ceCurrency === 'CAD'
-  const ceSarRequired  = ceSarFlagUS || ceStrFlagCA
-  // SAR deadline: 30 days from incident report date (FinCEN) / 30 days from detection (FINTRAC)
-  const ceSarDeadline  = ceSarDeadlineDate
-    ? new Date(new Date(ceSarDeadlineDate).getTime() + 30 * 86400000).toLocaleDateString('en-CA')
-    : null
   const ceSarDaysLeft  = ceSarDeadlineDate
     ? Math.ceil((new Date(ceSarDeadline) - new Date()) / 86400000)
     : null
@@ -887,117 +884,6 @@ Return ONLY valid JSON:
   const regEInvDue = (cardType === 'debit' && result)
     ? addBusinessDays(new Date().toISOString(), 45).toLocaleDateString('en-CA')
     : null
-
-  // ── analyseCE — crypto exchange incident analysis ─────────────────────────
-  const analyseCE = async () => {
-    if (!ceComplaint.trim()) { setCeError('Customer complaint is required.'); return }
-    setCeLoading(true); setCeError(null); setCeResult(null)
-
-    const sarNote = ceSarRequired
-      ? `⚠ SAR/STR THRESHOLD MET — ${ceSarFlagUS ? `FinCEN SAR required (≥$5,000 USD)` : ''}${ceSarFlagUS && ceStrFlagCA ? ' + ' : ''}${ceStrFlagCA ? 'FINTRAC STR required (≥$10,000 CAD)' : ''}`
-      : 'Below automatic SAR/STR threshold — assess for suspicion-based obligation'
-
-    const prompt = `You are a senior fraud operations analyst at a crypto exchange or digital asset platform (e.g. Coinbase, Kraken, Newton, Shakepay). Analyze this incident and produce a structured action plan.
-
-INCIDENT DETAILS:
-- Exchange / Platform: ${ceExchange || 'Not specified'}
-- Asset: ${ceAsset || 'Not specified'}${ceChain ? ` on ${ceChain}` : ''}
-- Transaction Type: ${ceTxType || 'Not specified'}
-- Amount: ${ceAmount ? `${ceAmount} ${ceCurrency}` : 'Not specified'}
-- Transaction Date: ${ceTxDate || 'Not specified'}${ceDaysSince !== null ? ` (${ceDaysSince} days ago)` : ''}
-- Destination Type: ${ceDestType || 'Unknown'}
-- Destination: ${ceDestination || 'Not specified'}
-- Receiving Exchange: ${ceReceivingExchange || 'Unknown'}
-- Blockchain Trace Status: ${ceBlockchainTrace || 'Unknown'}
-- Triage Routing Code: ${ceRoutingCode || 'Not specified'}
-- SAR/STR Status: ${sarNote}
-
-CUSTOMER / ACCOUNT CONTEXT:
-- Suspected Compromise Vector: ${ceCompromiseVector || 'Unknown'}
-- Recent Account Changes: ${ceRecentAcctChanges || 'Unknown'}
-- Device / Location: ${ceDeviceNew || 'Unknown'}
-- Prior Claims: ${cePriorClaims || 'Unknown'}
-- KYC Level: ${ceKycLevel || 'Unknown'}
-
-JURISDICTION: ${ceCountry === 'us' ? 'United States (FinCEN/BSA)' : ceCountry === 'ca' ? 'Canada (FINTRAC/PCMLTFA)' : 'US + Canada (FinCEN + FINTRAC)'}
-
-CUSTOMER'S STATED REASON:
-${ceComplaint}
-
-INCIDENT CLASSIFICATION:
-- ATO: Account takeover — unauthorized access via SIM-swap, phishing, credential stuffing, API key theft, malware
-- SOCIAL_ENGINEERING: Customer authorized transfers but was deceived (pig butchering, romance scam, fake support, investment scam)
-- CONSUMER_DISPUTE: Platform error — trade execution failure, withdrawal delay, incorrect fee, wrongly locked account
-- FIRST_PARTY_FRAUD: Customer authorized all activity themselves; falsely claiming fraud (e.g. after losing trade)
-
-ANALYSIS GUIDANCE:
-- ATO: Prioritize immediate account freeze and blockchain trace. If SIM-swap suspected, contact carrier. Check for API key activity. Recovery probability depends on speed of freeze and receiving exchange cooperation.
-- SOCIAL_ENGINEERING: No reversal path on blockchain. Focus on blockchain trace, receiving exchange freeze request, FBI IC3 / CAFC referral, SAR filing. Recovery: 15-30%.
-- CONSUMER_DISPUTE: No law enforcement needed. Internal investigation + goodwill credit if platform error confirmed. Check transaction logs, order book, API latency.
-- FIRST_PARTY_FRAUD: Document for SAR if pattern. No refund. Flag account for enhanced monitoring.
-
-RECOVERY OUTLOOK:
-- HIGH (60-80%): ATO with immediate freeze, funds still on regulated exchange, blockchain trace live
-- MODERATE (35-60%): ATO with delay, custodial wallet, receiving exchange regulated and cooperative
-- LOW (15-35%): Social engineering with multiple hops, receiving exchange unknown or offshore
-- VERY_LOW (<15%): Pig butchering / investment scam, funds already moved to unhosted wallets, self-custody
-
-Return ONLY valid JSON, no markdown:
-{
-  "incident_type": "ATO" | "SOCIAL_ENGINEERING" | "CONSUMER_DISPUTE" | "FIRST_PARTY_FRAUD",
-  "severity": "CRITICAL" | "HIGH" | "MEDIUM" | "LOW",
-  "headline": "One tight sentence for the incident report header.",
-  "immediate_actions": ["Action within the next hour — be specific, e.g. 'Freeze account in Admin panel'", "..."],
-  "investigation_steps": ["Step within 24-48 hours — be specific", "..."],
-  "evidence_required": {
-    "internal": ["Pull from exchange systems — e.g. login logs, 2FA history, API key audit", "..."],
-    "external": ["Obtain from customer or third parties — e.g. police report, carrier SIM swap confirmation", "..."],
-    "blockchain": ["On-chain evidence — e.g. trace transaction hash, cluster analysis, OFAC screen receiving address", "..."]
-  },
-  "sar_required": true | false,
-  "sar_note": "SAR/STR filing note — deadline, which jurisdiction, what to include.",
-  "lea_referral_recommended": true | false,
-  "lea_note": "Which agency (FBI IC3 / RCMP CAFC / both), what to include in the referral, expected outcome.",
-  "exchange_contact_required": true | false,
-  "exchange_note": "Which exchange, contact method (TRUST network / direct compliance email / Telegram freeze request channel), urgency.",
-  "recovery_outlook": "HIGH" | "MODERATE" | "LOW" | "VERY_LOW",
-  "recovery_note": "1-2 sentences on recovery probability and what drives it.",
-  "customer_letter": {
-    "subject": "Re: Your Recent Account Security Incident — [Exchange Name]",
-    "body": "Professional, empathetic letter to the customer. 3-4 paragraphs. Do not admit liability. Explain what the exchange is doing, what the customer should do, and the expected timeline."
-  },
-  "risk_notes": "Any compliance or operational watch-outs specific to this incident — or empty string."
-}`
-
-    try {
-      const response = await fetch('/api/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 2000, messages: [{ role: 'user', content: prompt }] }),
-      })
-      if (!response.ok) throw new Error(`API error: ${response.status}`)
-      const data = await response.json()
-      const text = data.content.filter(b => b.type === 'text').map(b => b.text).join('').replace(/```json|```/g, '').trim()
-      const parsed = JSON.parse(text)
-      setCeResult(parsed)
-      // Add to outcome tracker
-      setOutcomes(prev => [{
-        id: `CE-${Date.now().toString(36).toUpperCase().slice(-5)}`,
-        date: new Date().toISOString(),
-        merchant: ceExchange || ceDestination || '—',
-        amount: ceAmount ? `${ceAmount} ${ceCurrency}` : '—',
-        network: `crypto_exchange`,
-        reasonCode: ceRoutingCode || parsed.incident_type,
-        reasonTitle: parsed.headline,
-        status: 'pending',
-        notes: '',
-      }, ...prev].slice(0, 200))
-    } catch (e) {
-      setCeError(`Analysis failed: ${e.message}`)
-    } finally {
-      setCeLoading(false)
-    }
-  }
 
   const isFraud     = result?.category === 'fraud' || result?.category === 'mc_fraud'
   let filingWindow  = null
@@ -1166,20 +1052,8 @@ Return ONLY valid JSON, no markdown:
             <span style={{ fontStyle: 'italic', fontWeight: 500 }}>Desk</span>
           </h1>
           <p className="display-font text-stone-700 mt-4 max-w-2xl" style={{ fontSize: 'clamp(15px, 2vw, 17px)', lineHeight: '1.5' }}>
-            {isCE
-              ? 'Crypto exchange incident desk. ATO, social engineering, and consumer dispute analysis — with blockchain evidence packages, SAR/STR deadline tracking, LEA referral guidance, and customer communications built for digital asset platforms.'
-              : 'An operational tool for translating customer complaints into compliant dispute summaries — with a built-in evidence package and merchant defense preview for every case.'}
+            An operational tool for translating customer complaints into compliant dispute summaries — with a built-in evidence package and merchant defense preview for every case.
           </p>
-
-          {/* Platform toggle */}
-          <div className="mt-5 flex gap-1 p-1 w-fit" style={{ background: '#E8E3DA' }}>
-            {[{ id: 'fi', label: 'Financial Institution' }, { id: 'ce', label: 'Crypto Exchange' }].map(m => (
-              <button key={m.id} onClick={() => { setPlatformMode(m.id); setCeResult(null); setCeError(null) }}
-                className="mono-font text-xs tracking-widest px-4 py-2 transition-all"
-                style={{ background: platformMode === m.id ? '#1A1814' : 'transparent', color: platformMode === m.id ? '#F5F1EA' : '#6B5F4D' }}
-              >{m.label}</button>
-            ))}
-          </div>
         </div>
 
         {/* ── Triage handoff banner ── */}
@@ -1202,172 +1076,8 @@ Return ONLY valid JSON, no markdown:
         {/* ── Steps 01 + 02 ── */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
 
-          {/* ════ CE INTAKE FORM ════ */}
-          {isCE && (
-          <div>
-            <div className="flex items-baseline gap-3 mb-6">
-              <span className="mono-font text-xs text-stone-500">01</span>
-              <h2 className="display-font font-semibold text-2xl text-stone-900" style={{ letterSpacing: '-0.01em' }}>Incident Intake</h2>
-            </div>
-
-            {/* Jurisdiction */}
-            <div className="mb-5">
-              <label className="input-label">Jurisdiction</label>
-              <select value={ceCountry} onChange={e => setCeCountry(e.target.value)} className="input-field" style={{ fontSize: '14px' }}>
-                <option value="both">Both — US (FinCEN) + Canada (FINTRAC)</option>
-                <option value="us">United States — FinCEN / BSA</option>
-                <option value="ca">Canada — FINTRAC / PCMLTFA</option>
-              </select>
-              <div className="flex items-center gap-2 mt-2">
-                <span className="mono-font text-xs px-2 py-1" style={{ background: '#064E3B', color: '#6EE7B7' }}>
-                  {ceCountry === 'us' ? 'FinCEN / BSA' : ceCountry === 'ca' ? 'FINTRAC / PCMLTFA' : 'FinCEN + FINTRAC'}
-                </span>
-                {ceSarRequired && (
-                  <span className="mono-font text-xs px-2 py-1" style={{ background: '#92400E', color: '#FEF3C7' }}>
-                    ⚠ SAR/STR THRESHOLD MET
-                  </span>
-                )}
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="input-label">Exchange / Platform</label>
-                  <input type="text" value={ceExchange} onChange={e => setCeExchange(e.target.value)} placeholder="e.g. Coinbase, Newton, Kraken" className="input-field" />
-                </div>
-                <div>
-                  <label className="input-label">Triage Routing</label>
-                  <select value={ceRoutingCode} onChange={e => setCeRoutingCode(e.target.value)} className="input-field" style={{ fontSize: '13px' }}>
-                    <option value="">Select / pre-filled from Triage…</option>
-                    <option value="ACCOUNT_FREEZE">ACCOUNT_FREEZE — Immediate account lock</option>
-                    <option value="EXCHANGE_CONTACT">EXCHANGE_CONTACT — Contact receiving exchange</option>
-                    <option value="LEA_REFERRAL">LEA_REFERRAL — Law enforcement referral</option>
-                    <option value="INTERNAL_REVIEW">INTERNAL_REVIEW — Consumer dispute / internal</option>
-                    <option value="FLAG_INVESTIGATION">FLAG_INVESTIGATION — First-party fraud suspected</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="input-label">Digital Asset</label>
-                  <select value={ceAsset} onChange={e => setCeAsset(e.target.value)} className="input-field" style={{ fontSize: '14px' }}>
-                    <option value="">Select…</option>
-                    {['BTC','ETH','USDT','USDC','SOL','XRP','BNB','MATIC','Other'].map(a => <option key={a}>{a}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="input-label">Blockchain Network</label>
-                  <select value={ceChain} onChange={e => setCeChain(e.target.value)} className="input-field" style={{ fontSize: '14px' }}>
-                    <option value="">Select…</option>
-                    {['Bitcoin mainnet','Ethereum mainnet','Solana','BNB Chain','Polygon','Tron (TRC-20)','Avalanche','Unknown / off-chain'].map(c => <option key={c}>{c}</option>)}
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="input-label">Transaction Type</label>
-                  <select value={ceTxType} onChange={e => setCeTxType(e.target.value)} className="input-field" style={{ fontSize: '14px' }}>
-                    <option value="">Select…</option>
-                    {['External withdrawal','Internal transfer','Spot trade / conversion','Fiat off-ramp','API-initiated transfer','Staking withdrawal'].map(t => <option key={t}>{t}</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="input-label">Transaction Date</label>
-                  <input type="date" value={ceTxDate} onChange={e => setCeTxDate(e.target.value)} className="input-field mono-font" style={{ fontSize: '13px' }} />
-                  {ceDaysSince !== null && <div className="mono-font text-xs text-stone-400 mt-1">{ceDaysSince === 0 ? 'Today' : `${ceDaysSince} days ago`}</div>}
-                </div>
-              </div>
-
-              {/* Amount + SAR flag */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="input-label">Amount</label>
-                  <div className="flex gap-2">
-                    <input type="text" value={ceAmount} onChange={e => setCeAmount(e.target.value)} placeholder="0.00" className="input-field" style={{ flex: 2 }} />
-                    <select value={ceCurrency} onChange={e => setCeCurrency(e.target.value)} className="input-field mono-font" style={{ flex: 1, fontSize: '12px' }}>
-                      {['USD','CAD','EUR','BTC','ETH','USDC','USDT'].map(c => <option key={c}>{c}</option>)}
-                    </select>
-                  </div>
-                </div>
-                <div>
-                  <label className="input-label">Date Incident Reported <span className="mono-font text-[10px] text-stone-400">(for SAR deadline)</span></label>
-                  <input type="date" value={ceSarDeadlineDate} onChange={e => setCeSarDeadlineDate(e.target.value)} className="input-field mono-font" style={{ fontSize: '13px' }} />
-                  {ceSarDeadline && (
-                    <div className={`mono-font text-xs mt-1 ${ceSarDaysLeft !== null && ceSarDaysLeft <= 7 ? 'text-red-700 font-bold' : ceSarDaysLeft !== null && ceSarDaysLeft <= 14 ? 'text-amber-700' : 'text-stone-400'}`}>
-                      SAR/STR deadline: {ceSarDeadline} ({ceSarDaysLeft !== null ? `${ceSarDaysLeft} days remaining` : ''})
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Destination */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="input-label">Destination Type</label>
-                  <select value={ceDestType} onChange={e => setCeDestType(e.target.value)} className="input-field" style={{ fontSize: '13px' }}>
-                    <option value="">Unknown</option>
-                    <option>External unhosted wallet</option>
-                    <option>Known regulated exchange</option>
-                    <option>Unknown / suspicious exchange</option>
-                    <option>DeFi protocol / smart contract</option>
-                    <option>Internal platform wallet</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="input-label">Receiving Exchange (if known)</label>
-                  <input type="text" value={ceReceivingExchange} onChange={e => setCeReceivingExchange(e.target.value)} placeholder="e.g. Binance, OKX, Huobi" className="input-field" style={{ fontSize: '14px' }} />
-                </div>
-              </div>
-
-              {/* Compromise signals */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="input-label">Suspected Compromise Vector</label>
-                  <select value={ceCompromiseVector} onChange={e => setCeCompromiseVector(e.target.value)} className="input-field" style={{ fontSize: '13px' }}>
-                    <option value="">Unknown</option>
-                    <option value="SIM-swap">SIM-swap</option>
-                    <option value="Phishing — fake exchange or email">Phishing</option>
-                    <option value="Credential stuffing / password breach">Credential stuffing</option>
-                    <option value="API key theft">API key theft</option>
-                    <option value="Social engineering / pig butchering">Social engineering / pig butchering</option>
-                    <option value="Malware / device compromise">Malware / device</option>
-                    <option value="Insider threat">Insider threat</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="input-label">Blockchain Trace Status</label>
-                  <select value={ceBlockchainTrace} onChange={e => setCeBlockchainTrace(e.target.value)} className="input-field" style={{ fontSize: '13px' }}>
-                    <option value="">Unknown</option>
-                    <option value="Funds still traceable on-chain">Still traceable on-chain</option>
-                    <option value="Already moved or mixed">Already moved / mixed</option>
-                    <option value="Off-chain or unknown destination">Off-chain / unknown</option>
-                  </select>
-                </div>
-              </div>
-
-              <div>
-                <label className="input-label">Customer's Statement <span style={{ color: '#B45309' }}>*</span></label>
-                <textarea value={ceComplaint} onChange={e => setCeComplaint(e.target.value)}
-                  placeholder="Paste the customer's account of what happened…" rows={5} className="input-field" style={{ resize: 'vertical' }} />
-              </div>
-            </div>
-
-            {/* CE Analyse button */}
-            <div className="mt-8">
-              <button onClick={analyseCE} disabled={ceLoading || !ceComplaint.trim()}
-                className="w-full bg-stone-900 text-stone-50 py-4 mono-font text-xs tracking-widest hover:bg-stone-800 disabled:bg-stone-400 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-3">
-                {ceLoading ? <><Loader2 className="w-4 h-4 animate-spin" /><span>ANALYSING INCIDENT</span></> : <><span>ANALYSE INCIDENT</span><ArrowRight className="w-4 h-4" /></>}
-              </button>
-              {ceError && <div className="mt-4 border border-red-700 bg-red-50 p-4 flex gap-3"><AlertCircle className="w-5 h-5 text-red-700 shrink-0 mt-0.5" /><div className="display-font text-sm text-red-900">{ceError}</div></div>}
-            </div>
-          </div>
-          )} {/* end CE intake */}
 
           {/* ════ FI INTAKE FORM ════ */}
-          {!isCE && (
           <div>
             <div className="flex items-baseline gap-3 mb-6">
               <span className="mono-font text-xs text-stone-500">01</span>
@@ -1417,6 +1127,33 @@ Return ONLY valid JSON, no markdown:
                     </div>
                   )}
                 </div>
+              </div>
+
+              {/* 3DS / authentication status */}
+              <div>
+                <label className="input-label">3DS / Authentication Status <span className="mono-font text-[10px] text-stone-400 normal-case tracking-normal">(for CNP disputes — affects reason code strength)</span></label>
+                <div className="flex gap-0 flex-wrap">
+                  {[
+                    { id: 'not_attempted', label: 'NOT ATTEMPTED' },
+                    { id: 'attempted_failed', label: 'ATTEMPTED — FAILED' },
+                    { id: 'attempted_passed', label: 'ATTEMPTED — PASSED' },
+                    { id: 'unknown', label: 'UNKNOWN' },
+                  ].map(opt => (
+                    <button key={opt.id} onClick={() => setThreeDSStatus(opt.id)}
+                      className={"network-btn " + (threeDSStatus === opt.id ? 'active' : 'inactive')}
+                    >{opt.label}</button>
+                  ))}
+                </div>
+                {threeDSStatus === 'attempted_passed' && (
+                  <div className="mt-1.5 mono-font text-[10px] text-red-800 tracking-wide">
+                    ⚠ Passed 3DS typically shifts liability to issuer — review before filing 10.4 CNP
+                  </div>
+                )}
+                {threeDSStatus === 'not_attempted' && (
+                  <div className="mt-1.5 mono-font text-[10px] text-emerald-800 tracking-wide">
+                    No 3DS strengthens fraud disputes — include in evidence package
+                  </div>
+                )}
               </div>
 
               <div>
@@ -1525,196 +1262,9 @@ Return ONLY valid JSON, no markdown:
               )}
             </div>
           </div>
-          )} {/* end FI intake */}
 
-          {/* ════ CE OUTPUT SECTION (col 2 when isCE) ════ */}
-          {isCE && (
-          <div>
-            {!ceResult && !ceLoading && (
-              <div className="border border-dashed border-stone-400 p-12 text-center">
-                <FileText className="w-8 h-8 text-stone-400 mx-auto mb-3" />
-                <p className="display-font text-stone-500 italic">Fill in the incident details and click Analyse Incident.</p>
-              </div>
-            )}
-            {ceLoading && (
-              <div className="border border-stone-300 p-12 text-center bg-stone-50">
-                <Loader2 className="w-8 h-8 text-stone-700 mx-auto mb-3 animate-spin" />
-                <p className="display-font text-stone-700 italic">Reviewing incident and generating action plan…</p>
-              </div>
-            )}
-            {ceResult && (
-              <div className="space-y-5">
-                {/* Incident type + severity header */}
-                <div className="border-2 border-stone-900 bg-stone-50 p-5">
-                  <div className="flex items-start justify-between mb-3 flex-wrap gap-2">
-                    <div className="flex gap-2 flex-wrap">
-                      <span className={`mono-font text-xs px-2 py-1 ${ceResult.severity === 'CRITICAL' ? 'bg-red-900 text-red-50' : ceResult.severity === 'HIGH' ? 'bg-amber-900 text-amber-50' : ceResult.severity === 'MEDIUM' ? 'bg-stone-700 text-stone-50' : 'bg-stone-400 text-stone-900'}`}>
-                        {ceResult.severity}
-                      </span>
-                      <span className="mono-font text-xs px-2 py-1 bg-stone-900 text-stone-50">
-                        {ceResult.incident_type?.replace(/_/g, ' ')}
-                      </span>
-                    </div>
-                    <button onClick={() => {
-                      const txt = [
-                        `CE INCIDENT — ${ceResult.incident_type?.replace(/_/g,' ')} — ${ceResult.severity}`,
-                        ceResult.headline, '',
-                        'IMMEDIATE ACTIONS:',
-                        ...(ceResult.immediate_actions||[]).map((a,i) => `${i+1}. ${a}`), '',
-                        'INVESTIGATION STEPS:',
-                        ...(ceResult.investigation_steps||[]).map((s,i) => `${i+1}. ${s}`), '',
-                        `RECOVERY OUTLOOK: ${ceResult.recovery_outlook} — ${ceResult.recovery_note}`,
-                        ceResult.sar_required ? `SAR/STR REQUIRED: ${ceResult.sar_note}` : '',
-                        ceResult.lea_referral_recommended ? `LEA REFERRAL: ${ceResult.lea_note}` : '',
-                        ceResult.exchange_contact_required ? `EXCHANGE CONTACT: ${ceResult.exchange_note}` : '',
-                      ].filter(Boolean).join('\n')
-                      navigator.clipboard.writeText(txt)
-                      setCeCopied(true); setTimeout(() => setCeCopied(false), 2000)
-                    }} className="mono-font text-xs flex items-center gap-1.5 text-stone-600 hover:text-stone-900 transition-colors">
-                      {ceCopied ? <><Check className="w-3 h-3" /> COPIED</> : <><Copy className="w-3 h-3" /> COPY REPORT</>}
-                    </button>
-                  </div>
-                  <p className="display-font font-semibold text-stone-900 leading-snug" style={{ fontSize: '17px' }}>{ceResult.headline}</p>
-                  {ceResult.risk_notes && <p className="mono-font text-xs text-amber-800 mt-2 leading-snug">⚠ {ceResult.risk_notes}</p>}
-                </div>
-
-                {/* Immediate actions */}
-                <div className="border-l-4 border-red-800 bg-red-50 p-5">
-                  <div className="mono-font text-xs tracking-widest text-red-900 mb-3">⚡ IMMEDIATE ACTIONS — DO NOW</div>
-                  <div className="space-y-2">
-                    {ceResult.immediate_actions?.map((a, i) => (
-                      <div key={i} className="flex gap-2.5 items-start">
-                        <span className="mono-font text-xs text-red-700 shrink-0 font-bold mt-0.5">{i+1}</span>
-                        <p className="display-font text-stone-900 text-[14px] leading-snug">{a}</p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Investigation steps */}
-                <div className="border border-stone-300 bg-stone-50 p-5">
-                  <div className="mono-font text-xs tracking-widest text-stone-600 mb-3">INVESTIGATION STEPS — 24–48 HRS</div>
-                  <div className="space-y-2">
-                    {ceResult.investigation_steps?.map((s, i) => (
-                      <div key={i} className="flex gap-2.5 items-start">
-                        <span className="mono-font text-xs text-stone-500 shrink-0 mt-0.5">{i+1}</span>
-                        <p className="display-font text-stone-800 text-[14px] leading-snug">{s}</p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Evidence package */}
-                {ceResult.evidence_required && (
-                  <div>
-                    <div className="mono-font text-xs tracking-widest text-stone-600 mb-3">EVIDENCE PACKAGE</div>
-                    <div className="space-y-3">
-                      {ceResult.evidence_required.internal?.length > 0 && (
-                        <div className="border border-stone-300 bg-stone-50 p-4">
-                          <div className="mono-font text-[10px] tracking-widest text-stone-500 mb-2">INTERNAL — PULL FROM EXCHANGE SYSTEMS</div>
-                          {ceResult.evidence_required.internal.map((ev, i) => (
-                            <div key={i} className="display-font text-stone-800 text-[13px] flex gap-2 items-start leading-snug mb-1.5">
-                              <span className="text-stone-400 shrink-0">→</span><span>{ev}</span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                      {ceResult.evidence_required.external?.length > 0 && (
-                        <div className="border border-stone-300 bg-stone-50 p-4">
-                          <div className="mono-font text-[10px] tracking-widest text-stone-500 mb-2">EXTERNAL — FROM CUSTOMER OR THIRD PARTIES</div>
-                          {ceResult.evidence_required.external.map((ev, i) => (
-                            <div key={i} className="display-font text-stone-800 text-[13px] flex gap-2 items-start leading-snug mb-1.5">
-                              <span className="text-stone-400 shrink-0">→</span><span>{ev}</span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                      {ceResult.evidence_required.blockchain?.length > 0 && (
-                        <div className="border border-stone-300 bg-stone-50 p-4">
-                          <div className="mono-font text-[10px] tracking-widest text-stone-500 mb-2">BLOCKCHAIN — ON-CHAIN EVIDENCE</div>
-                          {ceResult.evidence_required.blockchain.map((ev, i) => (
-                            <div key={i} className="display-font text-stone-800 text-[13px] flex gap-2 items-start leading-snug mb-1.5">
-                              <span className="text-stone-400 shrink-0">⛓</span><span>{ev}</span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {/* SAR/STR */}
-                {ceResult.sar_required && (
-                  <div className="border-l-4 border-amber-700 bg-amber-50 p-5">
-                    <div className="mono-font text-xs tracking-widest text-amber-900 mb-2">⚠ SAR / STR FILING REQUIRED</div>
-                    <p className="display-font text-stone-900 text-[14px] leading-relaxed">{ceResult.sar_note}</p>
-                    {ceSarDeadline && (
-                      <div className={`mono-font text-xs mt-3 font-bold ${ceSarDaysLeft !== null && ceSarDaysLeft <= 7 ? 'text-red-700' : ceSarDaysLeft !== null && ceSarDaysLeft <= 14 ? 'text-amber-700' : 'text-stone-600'}`}>
-                        DEADLINE: {ceSarDeadline}{ceSarDaysLeft !== null ? ` — ${ceSarDaysLeft} days remaining` : ''}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* LEA referral */}
-                {ceResult.lea_referral_recommended && (
-                  <div className="border border-stone-900 bg-white p-5">
-                    <div className="mono-font text-xs tracking-widest text-stone-700 mb-2">LAW ENFORCEMENT REFERRAL</div>
-                    <p className="display-font text-stone-800 text-[14px] leading-relaxed">{ceResult.lea_note}</p>
-                  </div>
-                )}
-
-                {/* Exchange contact */}
-                {ceResult.exchange_contact_required && (
-                  <div className="border border-stone-300 bg-stone-50 p-5">
-                    <div className="mono-font text-xs tracking-widest text-stone-600 mb-2">EXCHANGE CONTACT REQUIRED</div>
-                    <p className="display-font text-stone-800 text-[14px] leading-relaxed">{ceResult.exchange_note}</p>
-                  </div>
-                )}
-
-                {/* Recovery outlook */}
-                <div className="border border-stone-300 bg-stone-50 p-5">
-                  <div className="flex items-center gap-3 mb-2 flex-wrap">
-                    <div className="mono-font text-xs tracking-widest text-stone-600">RECOVERY OUTLOOK</div>
-                    <span className={`mono-font text-xs px-2 py-1 ${ceResult.recovery_outlook === 'HIGH' ? 'bg-emerald-900 text-emerald-50' : ceResult.recovery_outlook === 'MODERATE' ? 'bg-amber-800 text-amber-50' : ceResult.recovery_outlook === 'LOW' ? 'bg-red-900 text-red-50' : 'bg-stone-900 text-stone-50'}`}>
-                      {ceResult.recovery_outlook}
-                    </span>
-                  </div>
-                  <p className="display-font text-stone-700 text-[14px] leading-relaxed">{ceResult.recovery_note}</p>
-                </div>
-
-                {/* Customer letter */}
-                {ceResult.customer_letter && (
-                  <div className="border border-stone-900">
-                    <div className="bg-stone-900 p-4 flex items-start justify-between flex-wrap gap-3">
-                      <div>
-                        <div className="mono-font text-xs tracking-widest text-stone-400 mb-1">CUSTOMER LETTER</div>
-                        <div className="display-font text-stone-100 font-semibold text-sm">{ceResult.customer_letter.subject}</div>
-                      </div>
-                      <button onClick={() => {
-                        const full = `Subject: ${ceResult.customer_letter.subject}\n\nDear Valued Customer,\n\n${ceResult.customer_letter.body}\n\nSincerely,\nCustomer Support Team`
-                        navigator.clipboard.writeText(full)
-                        setCeCopied(true); setTimeout(() => setCeCopied(false), 2000)
-                      }} className="mono-font text-xs flex items-center gap-1.5 text-stone-400 hover:text-stone-100 transition-colors">
-                        {ceCopied ? <><Check className="w-3 h-3" /> COPIED</> : <><Copy className="w-3 h-3" /> COPY LETTER</>}
-                      </button>
-                    </div>
-                    <div className="bg-white p-5 space-y-3">
-                      <p className="display-font text-stone-600 text-[13px] italic">Dear Valued Customer,</p>
-                      {ceResult.customer_letter.body?.split('\n\n').map((para, i) => (
-                        <p key={i} className="display-font text-stone-900 text-[14px] leading-relaxed">{para}</p>
-                      ))}
-                      <p className="display-font text-stone-600 text-[13px] italic pt-2">Sincerely,<br />Customer Support Team</p>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-          )} {/* end CE output */}
 
           {/* ════ FI ANALYSIS (02) ════ */}
-          {!isCE && (
           <div>
             <div className="flex items-baseline gap-3 mb-6">
               <span className="mono-font text-xs text-stone-500">02</span>
@@ -1905,12 +1455,9 @@ Return ONLY valid JSON, no markdown:
               </div>
             )}
           </div>
-          )} {/* end FI analysis */}
         </div>
 
         {/* ── Step 03 — Evidence Package ── */}
-        {!isCE && (
-          <>
             <div className="section-divider" />
             <div>
               <div className="flex items-baseline gap-3 mb-2">
@@ -1995,12 +1542,8 @@ Return ONLY valid JSON, no markdown:
                 )}
               </div>}
             </div>
-          </>
-        )}
 
         {/* ── Step 04 — Merchant Defense Preview ── */}
-        {!isCE && (
-          <>
             <div className="section-divider" />
             <div>
               <div className="flex items-baseline gap-3 mb-2">
@@ -2099,12 +1642,8 @@ Return ONLY valid JSON, no markdown:
                 </div>
               )}
             </div>
-          </>
-        )}
 
         {/* ── Step 05 — Customer Communication ── */}
-        {!isCE && (
-          <>
             <div className="section-divider" />
             <div>
               <div className="flex items-baseline gap-3 mb-2">
@@ -2253,12 +1792,8 @@ Return ONLY valid JSON, no markdown:
                 </div>
               )}
             </div>
-          </>
-        )}
 
         {/* ── Step 06 — Goodwill Credit ── */}
-        {!isCE && (
-          <>
             <div className="section-divider" />
             <div>
               <div className="flex items-baseline gap-3 mb-2">
@@ -2318,8 +1853,6 @@ Return ONLY valid JSON, no markdown:
                 </div>
               )}
             </div>
-          </>
-        )}
 
         {/* ── Section 07 — Dispute Outcome Tracker ── */}
         {visibleOutcomes.length > 0 && (
@@ -2504,6 +2037,46 @@ Return ONLY valid JSON, no markdown:
                 <div className="overflow-x-auto">
                   <div style={{ minWidth: '700px' }}>
                     {/* Header */}
+                    {/* ── Deadline dashboard ── */}
+                    {(() => {
+                      const now = new Date()
+                      const deadlines = visibleOutcomes
+                        .filter(o => LIFECYCLE_IN_PROGRESS.has(o.status))
+                        .flatMap(o => {
+                          const entries = []
+                          // Reg E PC deadline (10 BD)
+                          if (o.provCreditDate) {
+                            const pc10 = addBusinessDays(o.provCreditDate, settings.pcMilestones[0])
+                            const daysLeft = Math.ceil((pc10 - now) / 86400000)
+                            if (daysLeft <= 14) entries.push({ id: o.id, type: 'REG E PC', deadline: pc10.toLocaleDateString('en-CA'), daysLeft, merchant: o.merchant })
+                          }
+                          // Reg E investigation deadline (45 BD)
+                          if (o.provCreditDate) {
+                            const inv = addBusinessDays(o.provCreditDate, settings.pcMilestones[1])
+                            const daysLeft = Math.ceil((inv - now) / 86400000)
+                            if (daysLeft <= 21) entries.push({ id: o.id, type: 'REG E INV', deadline: inv.toLocaleDateString('en-CA'), daysLeft, merchant: o.merchant })
+                          }
+                          return entries
+                        })
+                        .sort((a, b) => a.daysLeft - b.daysLeft)
+                      if (deadlines.length === 0) return null
+                      return (
+                        <div className="mb-4 border border-amber-700 bg-amber-50 p-4">
+                          <div className="mono-font text-[10px] tracking-widest text-amber-900 mb-3">⚑ UPCOMING COMPLIANCE DEADLINES</div>
+                          <div className="flex flex-wrap gap-3">
+                            {deadlines.map((d, i) => (
+                              <div key={i} className={"mono-font text-[10px] px-2 py-1.5 flex gap-2 items-center " + (d.daysLeft <= 3 ? 'bg-red-900 text-red-50' : d.daysLeft <= 7 ? 'bg-amber-800 text-amber-50' : 'bg-stone-800 text-stone-100')}>
+                                <span>{d.type}</span>
+                                <span className="font-bold">{d.merchant || d.id}</span>
+                                <span>{d.deadline}</span>
+                                <span>{d.daysLeft > 0 ? d.daysLeft + 'd' : d.daysLeft === 0 ? 'TODAY' : 'OVERDUE'}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )
+                    })()}
+
                     <div className="grid px-4 py-2 border-b border-stone-300" style={{ gridTemplateColumns: '90px 60px 1fr 90px 1fr 44px 160px 40px', background: '#EEE9E0' }}>
                       {['CASE', 'DATE', 'MERCHANT', 'AMOUNT', 'REASON CODE', 'DFA', 'STATUS', ''].map(h => (
                         <span key={h} className="mono-font text-[10px] tracking-widest text-stone-500">{h}</span>
@@ -2626,7 +2199,15 @@ Return ONLY valid JSON, no markdown:
                                   {o.status === 'representment' && (
                                     <>
                                       <span className="mono-font text-[10px] px-1.5 py-0.5 bg-amber-800 text-amber-50">REPMT RCV'D</span>
-                                      <button onClick={() => advanceStage(o.id, 'pre_arb')} title="File pre-arbitration" className="mono-font text-[10px] px-1.5 py-0.5 border border-purple-700 text-purple-700 hover:bg-purple-50 transition-colors">PRE-ARB</button>
+                                      <button onClick={() => {
+                                        const amtNum = parseFloat((o.amount || '').replace(/[^0-9.]/g, ''))
+                                        const arbFee = (o.network || '').toLowerCase().includes('visa') ? 500 : 200
+                                        if (!isNaN(amtNum) && amtNum < arbFee) {
+                                          if (!window.confirm('⚠ Arb fee warning: dispute amount (' + (o.amount || '?') + ') is less than the ' + (o.network || 'network') + ' arbitration fee (~$' + arbFee + '). Escalating to pre-arb will cost more than the dispute value. Proceed anyway?')) return
+                                        }
+                                        advanceStage(o.id, 'pre_arb')
+                                      }} title="File pre-arbitration" className="mono-font text-[10px] px-1.5 py-0.5 border border-purple-700 text-purple-700 hover:bg-purple-50 transition-colors">PRE-ARB</button>
+                                      <button onClick={() => generatePreArbDraft(o)} className="mono-font text-[10px] px-1.5 py-0.5 border border-stone-600 text-stone-600 hover:bg-stone-50 transition-colors">DRAFT PRE-ARB</button>
                                       <button onClick={() => markCaseOutcome(o.id, 'won')} className="mono-font text-[10px] px-1.5 py-0.5 border border-emerald-700 text-emerald-700 hover:bg-emerald-50 transition-colors">WON</button>
                                       <button onClick={() => markCaseOutcome(o.id, 'lost')} className="mono-font text-[10px] px-1.5 py-0.5 border border-red-700 text-red-700 hover:bg-red-50 transition-colors">LOST</button>
                                       <button onClick={() => revertCase(o.id)} className="mono-font text-[10px] text-stone-400 hover:text-stone-700 transition-colors px-1" title="Revert">↩</button>
@@ -2635,6 +2216,7 @@ Return ONLY valid JSON, no markdown:
                                   {o.status === 'pre_arb' && (
                                     <>
                                       <span className="mono-font text-[10px] px-1.5 py-0.5 bg-purple-900 text-purple-50">PRE-ARB FILED</span>
+                                      <button onClick={() => generatePreArbDraft(o)} className="mono-font text-[10px] px-1.5 py-0.5 border border-stone-600 text-stone-600 hover:bg-stone-50 transition-colors">DRAFT PRE-ARB</button>
                                       <button onClick={() => markCaseOutcome(o.id, 'won')} className="mono-font text-[10px] px-1.5 py-0.5 border border-emerald-700 text-emerald-700 hover:bg-emerald-50 transition-colors">WON</button>
                                       <button onClick={() => markCaseOutcome(o.id, 'lost')} className="mono-font text-[10px] px-1.5 py-0.5 border border-red-700 text-red-700 hover:bg-red-50 transition-colors">LOST</button>
                                       <button onClick={() => revertCase(o.id)} className="mono-font text-[10px] text-stone-400 hover:text-stone-700 transition-colors px-1" title="Revert">↩</button>
@@ -2711,6 +2293,100 @@ Return ONLY valid JSON, no markdown:
                   </button>
                 </div>
               </div>
+            </div>
+          </>
+        )}
+
+        {/* ── Pre-arb draft panel ── */}
+        {(preArbDraft || preArbLoading || preArbError) && (
+          <>
+            <div className="section-divider" />
+            <div>
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <div className="mono-font text-xs text-stone-500 mb-1">PRE-ARBITRATION RESPONSE DRAFTER</div>
+                  <div className="display-font font-semibold text-xl text-stone-900" style={{ letterSpacing: '-0.01em' }}>
+                    {preArbTargetId && 'Case ' + preArbTargetId}
+                  </div>
+                </div>
+                <button onClick={() => { setPreArbDraft(null); setPreArbError(null); setPreArbTargetId(null) }}
+                  className="mono-font text-[10px] text-stone-400 hover:text-stone-700 transition-colors tracking-widest">✕ CLOSE</button>
+              </div>
+
+              {preArbLoading && (
+                <div className="border border-stone-300 p-10 text-center" style={{ background: '#FAF7F1' }}>
+                  <Loader2 className="w-6 h-6 text-stone-600 mx-auto mb-2 animate-spin" />
+                  <p className="display-font text-stone-600 italic text-sm">Drafting pre-arbitration rebuttal…</p>
+                </div>
+              )}
+              {preArbError && (
+                <div className="border border-red-700 bg-red-50 p-4 flex gap-3 items-start">
+                  <AlertCircle className="w-4 h-4 text-red-700 shrink-0 mt-0.5" />
+                  <span className="display-font text-sm text-red-900">{preArbError}</span>
+                </div>
+              )}
+
+              {preArbDraft && (
+                <div className="space-y-5">
+                  {/* Summary + win assessment */}
+                  <div className="flex items-start gap-4 flex-wrap">
+                    <div className="flex-1 min-w-0 border border-stone-300 p-4" style={{ background: '#FAF7F1' }}>
+                      <div className="mono-font text-[10px] tracking-widest text-stone-400 mb-2">POSITION SUMMARY</div>
+                      <p className="display-font text-stone-800 text-[14px] leading-relaxed">{preArbDraft.summary}</p>
+                    </div>
+                    <div className="border border-stone-300 p-4 text-center shrink-0" style={{ background: '#FAF7F1', minWidth: '130px' }}>
+                      <div className="mono-font text-[10px] tracking-widest text-stone-400 mb-2">WIN ASSESSMENT</div>
+                      <div className={"mono-font text-sm font-bold px-2 py-1 " + (preArbDraft.win_assessment === 'STRONG' ? 'bg-emerald-900 text-emerald-50' : preArbDraft.win_assessment === 'MODERATE' ? 'bg-amber-800 text-amber-50' : 'bg-red-900 text-red-50')}>
+                        {preArbDraft.win_assessment}
+                      </div>
+                      <p className="display-font text-stone-500 text-[12px] mt-2 leading-snug">{preArbDraft.win_note}</p>
+                    </div>
+                  </div>
+
+                  {/* Rebuttal points */}
+                  <div className="border-l-4 border-stone-900 bg-stone-50 p-5">
+                    <div className="mono-font text-[10px] tracking-widest text-stone-600 mb-3">REBUTTAL POINTS</div>
+                    <div className="space-y-2">
+                      {preArbDraft.rebuttal_points?.map((pt, i) => (
+                        <div key={i} className="display-font text-stone-800 text-[14px] flex gap-2 leading-snug">
+                          <span className="mono-font text-[11px] text-stone-500 shrink-0 mt-0.5">{i+1}.</span>
+                          <span>{pt}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Evidence to attach */}
+                  <div className="border border-stone-200 p-4" style={{ background: '#FAF7F1' }}>
+                    <div className="mono-font text-[10px] tracking-widest text-stone-400 mb-3">EVIDENCE TO ATTACH</div>
+                    <div className="flex flex-wrap gap-2">
+                      {preArbDraft.evidence_to_attach?.map((e, i) => (
+                        <span key={i} className="mono-font text-[10px] px-2 py-1 border border-stone-300 text-stone-700">{e}</span>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Formal statement */}
+                  <div className="border border-stone-900">
+                    <div className="bg-stone-900 px-4 py-3 flex items-center justify-between">
+                      <div className="mono-font text-[10px] tracking-widest text-stone-400">FORMAL PRE-ARB STATEMENT</div>
+                      <button onClick={() => { navigator.clipboard.writeText(preArbDraft.formal_statement || ''); setPreArbCopied(true); setTimeout(() => setPreArbCopied(false), 2000) }}
+                        className="mono-font text-[10px] flex items-center gap-1.5 text-stone-400 hover:text-stone-200 transition-colors">
+                        {preArbCopied ? <><Check className="w-3 h-3" /> COPIED</> : <><Copy className="w-3 h-3" /> COPY</>}
+                      </button>
+                    </div>
+                    <div className="bg-white p-5">
+                      {(preArbDraft.formal_statement || '').split('\n\n').map((para, i) => (
+                        <p key={i} className={"display-font text-stone-800 text-[14px] leading-relaxed " + (i > 0 ? 'mt-3' : '')}>{para}</p>
+                      ))}
+                    </div>
+                  </div>
+
+                  {preArbDraft.filing_deadline_note && (
+                    <div className="mono-font text-[11px] text-amber-800 tracking-wide">⚠ {preArbDraft.filing_deadline_note}</div>
+                  )}
+                </div>
+              )}
             </div>
           </>
         )}
