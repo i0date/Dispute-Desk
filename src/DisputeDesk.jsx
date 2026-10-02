@@ -865,10 +865,6 @@ Return ONLY valid JSON:
     URL.revokeObjectURL(url)
   }
 
-  const ceSarDaysLeft  = ceSarDeadlineDate
-    ? Math.ceil((new Date(ceSarDeadline) - new Date()) / 86400000)
-    : null
-
   // ── FI SAR deadline (30 days from detection date, FinCEN / FINTRAC) ────────
   const fiSarDeadlineRaw = sarDiscoveryDate
     ? new Date(new Date(sarDiscoveryDate).getTime() + 30 * 86400000)
