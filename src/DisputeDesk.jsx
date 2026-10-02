@@ -911,14 +911,26 @@ Return ONLY valid JSON:
   }
 
   // ── CBR calculations (merchant mode) ──────────────────────────────────────
-  const cbrPct = (mchCbDisputes && mchCbTransactions && parseFloat(mchCbTransactions) > 0)
-    ? (parseFloat(mchCbDisputes) / parseFloat(mchCbTransactions)) * 100
+  // Auto-populate CBR from tracker (current calendar month)
+  const thisMonthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1)
+  const autoMchCount = outcomes.filter(o => o.mode === 'merchant' && new Date(o.date) >= thisMonthStart).length
+  const autoMchAmt   = Math.round(outcomes.filter(o => o.mode === 'merchant' && new Date(o.date) >= thisMonthStart)
+    .reduce((sum, o) => sum + (parseFloat((o.amount || '').replace(/[^0-9.]/g, '')) || 0), 0))
+  const effectiveCbrDisputes = mchCbDisputes !== '' ? mchCbDisputes : String(autoMchCount)
+  const effectiveCbrAmount   = mchCbAmount   !== '' ? mchCbAmount   : String(autoMchAmt)
+  const cbrPct = (effectiveCbrDisputes && mchCbTransactions && parseFloat(mchCbTransactions) > 0)
+    ? (parseFloat(effectiveCbrDisputes) / parseFloat(mchCbTransactions)) * 100
     : null
-  const cbrAmtNum     = parseFloat(mchCbAmount) || 0
+  const cbrAmtNum     = parseFloat(effectiveCbrAmount) || 0
   const visaVdmpBreach = cbrPct !== null && cbrPct >= 0.9  && cbrAmtNum >= 75000
   const visaVdmpWarn   = cbrPct !== null && cbrPct >= 0.65 && !visaVdmpBreach
   const mcMdmpBreach   = cbrPct !== null && cbrPct >= 1.5  && cbrAmtNum >= 1000
   const mcMdmpWarn     = cbrPct !== null && cbrPct >= 1.0  && !mcMdmpBreach
+
+  // Tracker — filtered by current platform mode
+  const trackerOutcomes = platformMode === 'merchant'
+    ? visibleOutcomes.filter(o => o.mode === 'merchant')
+    : visibleOutcomes.filter(o => o.mode !== 'merchant')
 
   // ── Outcome tracker helpers ────────────────────────────────────────────────
   const markCaseOutcome = (id, status) =>
@@ -1040,10 +1052,10 @@ Return ONLY valid JSON:
   const LIFECYCLE_IN_PROGRESS = new Set(['filed', 'representment', 'pre_arb'])
   const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000)
   const visibleOutcomes = outcomes.filter(o => new Date(o.date) > sixtyDaysAgo)
-  const wonCount        = visibleOutcomes.filter(o => o.status === 'won').length
-  const lostCount       = visibleOutcomes.filter(o => o.status === 'lost').length
-  const withdrawnCount  = visibleOutcomes.filter(o => o.status === 'withdrawn').length
-  const inProgressCount = visibleOutcomes.filter(o => LIFECYCLE_IN_PROGRESS.has(o.status)).length
+  const wonCount        = trackerOutcomes.filter(o => o.status === 'won').length
+  const lostCount       = trackerOutcomes.filter(o => o.status === 'lost').length
+  const withdrawnCount  = trackerOutcomes.filter(o => o.status === 'withdrawn').length
+  const inProgressCount = trackerOutcomes.filter(o => LIFECYCLE_IN_PROGRESS.has(o.status)).length
   const resolvedCount   = wonCount + lostCount + withdrawnCount
   const winRate         = resolvedCount > 0 ? Math.round((wonCount / resolvedCount) * 100) : null
 
@@ -1054,7 +1066,7 @@ Return ONLY valid JSON:
   // Analytics — derived from visibleOutcomes
   const [showAnalytics, setShowAnalytics] = useState(false)
   const analytics = React.useMemo(() => {
-    const resolved = visibleOutcomes.filter(o => o.status === 'won' || o.status === 'lost')
+    const resolved = trackerOutcomes.filter(o => o.status === 'won' || o.status === 'lost')
     // by network
     const byNetwork = {}
     resolved.forEach(o => {
@@ -1077,16 +1089,16 @@ Return ONLY valid JSON:
     for (let w = 7; w >= 0; w--) {
       const from = new Date(Date.now() - (w + 1) * 7 * 24 * 60 * 60 * 1000)
       const to   = new Date(Date.now() - w * 7 * 24 * 60 * 60 * 1000)
-      const wk   = visibleOutcomes.filter(o => { const d = new Date(o.date); return d >= from && d < to })
+      const wk   = trackerOutcomes.filter(o => { const d = new Date(o.date); return d >= from && d < to })
       const wWon = wk.filter(o => o.status === 'won').length
       const wRes = wk.filter(o => o.status === 'won' || o.status === 'lost').length
       weeks.push({ label: `W${8 - w}`, total: wk.length, won: wWon, resolved: wRes, rate: wRes > 0 ? Math.round(wWon / wRes * 100) : null })
     }
     // avg resolution time
-    const times = visibleOutcomes.filter(o => o.resolvedDate && o.date).map(o => Math.round((new Date(o.resolvedDate) - new Date(o.date)) / (1000 * 60 * 60 * 24)))
+    const times = trackerOutcomes.filter(o => o.resolvedDate && o.date).map(o => Math.round((new Date(o.resolvedDate) - new Date(o.date)) / (1000 * 60 * 60 * 24)))
     const avgDays = times.length > 0 ? Math.round(times.reduce((s, t) => s + t, 0) / times.length) : null
     return { byNetwork, topCodes, weeks, avgDays, resolvedCount: resolved.length }
-  }, [visibleOutcomes])
+  }, [trackerOutcomes])
 
   const impactStyle = (impact) => {
     if (impact === 'required')    return 'text-stone-900'
@@ -1158,7 +1170,9 @@ Return ONLY valid JSON:
             <span style={{ fontStyle: 'italic', fontWeight: 500 }}>Desk</span>
           </h1>
           <p className="display-font text-stone-700 mt-4 max-w-2xl" style={{ fontSize: 'clamp(15px, 2vw, 17px)', lineHeight: '1.5' }}>
-            An operational tool for translating customer complaints into compliant dispute summaries — with a built-in evidence package and merchant defense preview for every case.
+            {platformMode === 'fi'
+              ? 'An operational tool for translating customer complaints into compliant dispute summaries — with a built-in evidence package and merchant defense preview for every case.'
+              : 'Build your representment case, fight chargebacks with evidence, and monitor your chargeback ratio against Visa and Mastercard network thresholds.'}
           </p>
           <div className="flex items-center mt-6" style={{ borderTop: '1px solid #D4CCBC', paddingTop: '20px' }}>
             <button onClick={() => setPlatformMode('fi')} className={'mono-font text-xs tracking-widest px-5 py-2.5 border border-stone-900 transition-all ' + (platformMode === 'fi' ? 'bg-stone-900 text-stone-50' : 'bg-transparent text-stone-600 hover:bg-stone-100')}>ISSUER / FI MODE</button>
@@ -1681,34 +1695,6 @@ Return ONLY valid JSON:
               <div>
                 <label className="input-label">IP / Location Notes <span className="mono-font text-[10px] text-stone-400 normal-case tracking-normal">(AVS match, IP vs billing, device fingerprint)</span></label>
                 <input type="text" value={mchIpLogs} onChange={e => setMchIpLogs(e.target.value)} placeholder="e.g. IP matches billing zip, AVS match, same device as prior orders" className="input-field" />
-              </div>
-
-              <div className="border border-stone-300 p-4 space-y-3" style={{ background: '#EEE9E0' }}>
-                <div className="mono-font text-[10px] tracking-widest text-stone-600">CBR MONITOR — THIS MONTH</div>
-                <div className="grid grid-cols-3 gap-3">
-                  <div>
-                    <label className="input-label">DISPUTES</label>
-                    <input type="number" value={mchCbDisputes} onChange={e => setMchCbDisputes(e.target.value)} placeholder="12" className="input-field mono-font" style={{ fontSize: '13px' }} />
-                  </div>
-                  <div>
-                    <label className="input-label">TOTAL TXNS</label>
-                    <input type="number" value={mchCbTransactions} onChange={e => setMchCbTransactions(e.target.value)} placeholder="2400" className="input-field mono-font" style={{ fontSize: '13px' }} />
-                  </div>
-                  <div>
-                    <label className="input-label">DISPUTE VOL ($)</label>
-                    <input type="number" value={mchCbAmount} onChange={e => setMchCbAmount(e.target.value)} placeholder="8500" className="input-field mono-font" style={{ fontSize: '13px' }} />
-                  </div>
-                </div>
-                {cbrPct !== null && (
-                  <div className={'mono-font text-[10px] px-3 py-2 flex flex-wrap items-center gap-3 ' + (visaVdmpBreach || mcMdmpBreach ? 'bg-red-900 text-red-50' : visaVdmpWarn || mcMdmpWarn ? 'bg-amber-800 text-amber-50' : 'bg-emerald-900 text-emerald-50')}>
-                    <span className="font-bold">CBR: {cbrPct.toFixed(3)}%</span>
-                    {visaVdmpBreach && <span>VISA VDMP BREACH — {cbrPct.toFixed(2)}% above 0.90% threshold</span>}
-                    {!visaVdmpBreach && visaVdmpWarn && <span>Approaching VISA VDMP ({cbrPct.toFixed(2)}% — threshold 0.90%)</span>}
-                    {mcMdmpBreach && <span>MC MDMP BREACH — {cbrPct.toFixed(2)}% above 1.50% threshold</span>}
-                    {!mcMdmpBreach && mcMdmpWarn && <span>Approaching MC MDMP ({cbrPct.toFixed(2)}% — threshold 1.50%)</span>}
-                    {!visaVdmpBreach && !visaVdmpWarn && !mcMdmpBreach && !mcMdmpWarn && <span>Within network thresholds</span>}
-                  </div>
-                )}
               </div>
 
               <button onClick={analyzeMerchant} disabled={mchLoading || !complaint.trim()}
@@ -2260,7 +2246,7 @@ Return ONLY valid JSON:
         </>)}
 
         {/* ── Section 07 — Dispute Outcome Tracker ── */}
-        {visibleOutcomes.length > 0 && (
+        {trackerOutcomes.length > 0 && (
           <>
             <div className="section-divider" />
             <div>
@@ -2268,7 +2254,7 @@ Return ONLY valid JSON:
                 <span className="mono-font text-xs text-stone-500">07</span>
                 <h2 className="display-font font-semibold text-2xl text-stone-900" style={{ letterSpacing: '-0.01em' }}>Dispute Tracker</h2>
                 <div className="flex items-center gap-3 ml-auto flex-wrap">
-                  <span className="mono-font text-xs text-stone-400">60-DAY WINDOW · {visibleOutcomes.length} CASE{visibleOutcomes.length !== 1 ? 'S' : ''}</span>
+                  <span className="mono-font text-xs text-stone-400">60-DAY WINDOW · {trackerOutcomes.length} CASE{trackerOutcomes.length !== 1 ? 'S' : ''}</span>
                   <button onClick={() => setShowSettings(v => !v)} className={`mono-font text-[10px] tracking-widest px-2.5 py-1 border transition-colors ${showSettings ? 'border-stone-900 bg-stone-900 text-stone-50' : 'border-stone-300 text-stone-500 hover:border-stone-600 hover:text-stone-700'}`}>
                     ⚙ THRESHOLDS
                   </button>
@@ -2325,7 +2311,7 @@ Return ONLY valid JSON:
               {/* Stats */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
                 {[
-                  { label: 'TOTAL (60 DAYS)', value: visibleOutcomes.length,                         sub: 'cases analyzed'                            },
+                  { label: 'TOTAL (60 DAYS)', value: trackerOutcomes.length,                         sub: 'cases analyzed'                            },
                   { label: 'IN PROGRESS',      value: inProgressCount,                               sub: `filed / representment / pre-arb`          },
                   { label: 'WIN RATE',         value: winRate !== null ? `${winRate}%` : '—',        sub: `${resolvedCount} resolved`                 },
                   { label: 'WON / LOST',       value: `${wonCount} / ${lostCount}`,                  sub: `${withdrawnCount} withdrawn`               },
@@ -2445,7 +2431,7 @@ Return ONLY valid JSON:
                     {/* ── Deadline dashboard ── */}
                     {(() => {
                       const now = new Date()
-                      const deadlines = visibleOutcomes
+                      const deadlines = trackerOutcomes
                         .filter(o => LIFECYCLE_IN_PROGRESS.has(o.status))
                         .flatMap(o => {
                           const entries = []
@@ -2488,7 +2474,7 @@ Return ONLY valid JSON:
                       ))}
                     </div>
                     <div style={{ maxHeight: '480px', overflowY: 'auto' }}>
-                      {visibleOutcomes.map(o => {
+                      {trackerOutcomes.map(o => {
                         const [m0, m1, m2] = settings.pcMilestones
                         const pc10 = o.provCreditDate ? addBusinessDays(o.provCreditDate, m0) : null
                         const pc45 = o.provCreditDate ? addBusinessDays(o.provCreditDate, m1) : null
@@ -2635,8 +2621,8 @@ Return ONLY valid JSON:
                                       <button onClick={() => revertCase(o.id)} className="mono-font text-[10px] text-stone-400 hover:text-stone-700 transition-colors px-1" title="Re-mark">↩</button>
                                     </div>
                                   )}
-                                  {/* PC button — available on all non-terminal stages */}
-                                  {!o.provCreditDate && o.status !== 'withdrawn' && (
+                                  {/* PC button — FI only (Reg E is issuer obligation) */}
+                                  {o.mode !== 'merchant' && !o.provCreditDate && o.status !== 'withdrawn' && (
                                     <button onClick={() => markProvCredit(o.id)} className="mono-font text-[10px] px-1.5 py-0.5 border border-blue-700 text-blue-700 hover:bg-blue-50 transition-colors">PC</button>
                                   )}
                                 </div>
@@ -2645,7 +2631,7 @@ Return ONLY valid JSON:
                             )}
 
                             {/* Provisional credit deadline row */}
-                            {!isEditing && o.provCreditDate && (
+                            {!isEditing && o.provCreditDate && o.mode !== 'merchant' && (
                               <div className="px-4 pb-2 flex items-center gap-4 flex-wrap" style={{ background: '#EEF2FF' }}>
                                 <span className="mono-font text-[10px] text-blue-800 tracking-wider">PC ISSUED: {new Date(o.provCreditDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
                                 {[{ label: `${m0}BD`, date: pc10 }, { label: `${m1}BD`, date: pc45 }, { label: `${m2}BD`, date: pc90 }].map(({ label, date }) => {
@@ -2680,7 +2666,7 @@ Return ONLY valid JSON:
                 >CLEAR LOG</button>
                 <div className="flex items-center gap-2 flex-wrap">
                   <button
-                    onClick={() => exportDFACSV(visibleOutcomes)}
+                    onClick={() => exportDFACSV(trackerOutcomes)}
                     className="flex items-center gap-2 mono-font text-xs tracking-widest text-emerald-800 hover:text-emerald-900 border border-emerald-700 px-3 py-2 hover:bg-emerald-50 transition-colors"
                     style={{ background: '#FAF7F1' }}
                     title="Export pending cases as a DFA-ready CSV — upload directly to the Dispute Funding Assessor"
@@ -2796,7 +2782,7 @@ Return ONLY valid JSON:
           </>
         )}
 
-        {platformMode === 'merchant' && cbrPct !== null && (
+        {platformMode === 'merchant' && (
           <>
             <div className="section-divider" />
             <div>
@@ -2804,7 +2790,41 @@ Return ONLY valid JSON:
                 <span className="mono-font text-xs text-stone-500">08</span>
                 <h2 className="display-font font-semibold text-2xl text-stone-900" style={{ letterSpacing: '-0.01em' }}>Chargeback Ratio Monitor</h2>
               </div>
-              <p className="display-font text-stone-500 text-[15px] mb-6 ml-7">Network monitoring program thresholds. Enter monthly dispute volume in Step 01 to track your exposure.</p>
+              <p className="display-font text-stone-500 text-[15px] mb-4 ml-7">Network monitoring thresholds. Dispute count and volume are auto-filled from your tracker — enter total monthly transactions to compute your CBR.</p>
+
+              {/* CBR inputs */}
+              <div className="border border-stone-300 p-4 mb-6" style={{ background: '#EEE9E0' }}>
+                <div className="grid grid-cols-3 gap-4">
+                  <div>
+                    <label className="input-label">DISPUTES THIS MONTH</label>
+                    <input type="number" value={mchCbDisputes !== '' ? mchCbDisputes : String(autoMchCount)} onChange={e => setMchCbDisputes(e.target.value)} className="input-field mono-font" style={{ fontSize: '13px' }} />
+                    {mchCbDisputes === '' && autoMchCount > 0 && <div className="mono-font text-[9px] text-stone-400 mt-1">auto from tracker — edit to override</div>}
+                  </div>
+                  <div>
+                    <label className="input-label">TOTAL TXNS THIS MONTH</label>
+                    <input type="number" value={mchCbTransactions} onChange={e => setMchCbTransactions(e.target.value)} placeholder="enter total" className="input-field mono-font" style={{ fontSize: '13px' }} />
+                    <div className="mono-font text-[9px] text-stone-400 mt-1">required to calculate CBR%</div>
+                  </div>
+                  <div>
+                    <label className="input-label">DISPUTE VOLUME ($)</label>
+                    <input type="number" value={mchCbAmount !== '' ? mchCbAmount : String(autoMchAmt)} onChange={e => setMchCbAmount(e.target.value)} className="input-field mono-font" style={{ fontSize: '13px' }} />
+                    {mchCbAmount === '' && autoMchAmt > 0 && <div className="mono-font text-[9px] text-stone-400 mt-1">auto from tracker — edit to override</div>}
+                  </div>
+                </div>
+                {!mchCbTransactions && (
+                  <div className="mono-font text-[10px] text-stone-500 mt-3">↑ Enter your total monthly transaction count above to compute CBR% and check thresholds.</div>
+                )}
+                {cbrPct !== null && (
+                  <div className={'mono-font text-xs px-3 py-2 mt-3 flex flex-wrap items-center gap-3 ' + (visaVdmpBreach || mcMdmpBreach ? 'bg-red-900 text-red-50' : visaVdmpWarn || mcMdmpWarn ? 'bg-amber-800 text-amber-50' : 'bg-emerald-900 text-emerald-50')}>
+                    <span className="font-bold">CBR: {cbrPct.toFixed(3)}%</span>
+                    {visaVdmpBreach && <span>VISA VDMP BREACH — {cbrPct.toFixed(2)}% above 0.90%</span>}
+                    {!visaVdmpBreach && visaVdmpWarn && <span>Approaching VISA VDMP ({cbrPct.toFixed(2)}%)</span>}
+                    {mcMdmpBreach && <span>MC MDMP BREACH — {cbrPct.toFixed(2)}% above 1.50%</span>}
+                    {!mcMdmpBreach && mcMdmpWarn && <span>Approaching MC MDMP ({cbrPct.toFixed(2)}%)</span>}
+                    {!visaVdmpBreach && !visaVdmpWarn && !mcMdmpBreach && !mcMdmpWarn && <span>Within network thresholds</span>}
+                  </div>
+                )}
+              </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
                 <div className={'border-2 p-5 ' + (visaVdmpBreach ? 'border-red-700 bg-red-50' : visaVdmpWarn ? 'border-amber-600 bg-amber-50' : 'border-stone-300 bg-stone-50')}>
                   <div className="flex items-start justify-between mb-3">
