@@ -2837,7 +2837,7 @@ Return ONLY valid JSON:
                   </div>
                   <div className="space-y-2 mb-4">
                     <div className="flex items-center justify-between"><span className="mono-font text-[11px] text-stone-500">THRESHOLD</span><span className="mono-font text-[11px] text-stone-700">≥ 0.90% CBR AND ≥ $75,000</span></div>
-                    <div className="flex items-center justify-between"><span className="mono-font text-[11px] text-stone-500">YOUR CBR</span><span className={'mono-font text-sm font-bold ' + (visaVdmpBreach ? 'text-red-800' : visaVdmpWarn ? 'text-amber-800' : 'text-emerald-800')}>{cbrPct.toFixed(3)}%</span></div>
+                    <div className="flex items-center justify-between"><span className="mono-font text-[11px] text-stone-500">YOUR CBR</span><span className={'mono-font text-sm font-bold ' + (visaVdmpBreach ? 'text-red-800' : visaVdmpWarn ? 'text-amber-800' : 'text-emerald-800')}>{cbrPct !== null ? cbrPct.toFixed(3) + '%' : '—'}</span></div>
                     <div className="flex items-center justify-between"><span className="mono-font text-[11px] text-stone-500">DISPUTE VOLUME</span><span className={'mono-font text-[11px] font-bold ' + (cbrAmtNum >= 75000 ? 'text-red-700' : 'text-stone-700')}>${cbrAmtNum.toLocaleString()}</span></div>
                   </div>
                   <div style={{ height: '6px', background: '#D4CCBC', borderRadius: '2px' }}>
@@ -2859,7 +2859,7 @@ Return ONLY valid JSON:
                   </div>
                   <div className="space-y-2 mb-4">
                     <div className="flex items-center justify-between"><span className="mono-font text-[11px] text-stone-500">THRESHOLD</span><span className="mono-font text-[11px] text-stone-700">≥ 1.50% CBR AND ≥ $1,000</span></div>
-                    <div className="flex items-center justify-between"><span className="mono-font text-[11px] text-stone-500">YOUR CBR</span><span className={'mono-font text-sm font-bold ' + (mcMdmpBreach ? 'text-red-800' : mcMdmpWarn ? 'text-amber-800' : 'text-emerald-800')}>{cbrPct.toFixed(3)}%</span></div>
+                    <div className="flex items-center justify-between"><span className="mono-font text-[11px] text-stone-500">YOUR CBR</span><span className={'mono-font text-sm font-bold ' + (mcMdmpBreach ? 'text-red-800' : mcMdmpWarn ? 'text-amber-800' : 'text-emerald-800')}>{cbrPct !== null ? cbrPct.toFixed(3) + '%' : '—'}</span></div>
                     <div className="flex items-center justify-between"><span className="mono-font text-[11px] text-stone-500">DISPUTE VOLUME</span><span className={'mono-font text-[11px] font-bold ' + (cbrAmtNum >= 1000 ? 'text-stone-800' : 'text-stone-500')}>${cbrAmtNum.toLocaleString()}</span></div>
                   </div>
                   <div style={{ height: '6px', background: '#D4CCBC', borderRadius: '2px' }}>
