@@ -301,7 +301,28 @@ export default function DisputeDesk() {
   const [merchantRepNotes, setMerchantRepNotes]             = useState({}) // {[outcomeId]: string}
 
   // ── Platform mode ─────────────────────────────────────────────────────────
-  // CE mode removed — DisputeDesk is FI-only; CE analysts use Triage end-to-end
+  const [platformMode, setPlatformMode]                     = useState('fi') // 'fi' | 'merchant'
+
+  // ── Merchant intake state ─────────────────────────────────────────────────
+  const [mchReasonCode, setMchReasonCode]                   = useState('')
+  const [mchOrderDate, setMchOrderDate]                     = useState('')
+  const [mchOrderId, setMchOrderId]                         = useState('')
+  const [mchCustomerEmail, setMchCustomerEmail]             = useState('')
+  const [mchDeliveryConfirmed, setMchDeliveryConfirmed]     = useState('unknown')
+  const [mchThreeDS, setMchThreeDS]                         = useState('unknown')
+  const [mchRefundPolicyShown, setMchRefundPolicyShown]     = useState('unknown')
+  const [mchPriorOrders, setMchPriorOrders]                 = useState('')
+  const [mchIpLogs, setMchIpLogs]                           = useState('')
+  const [mchCbDisputes, setMchCbDisputes]                   = useState('')
+  const [mchCbTransactions, setMchCbTransactions]           = useState('')
+  const [mchCbAmount, setMchCbAmount]                       = useState('')
+  const [mchResult, setMchResult]                           = useState(null)
+  const [mchLoading, setMchLoading]                         = useState(false)
+  const [mchError, setMchError]                             = useState(null)
+  const [mchRepLetter, setMchRepLetter]                     = useState(null)
+  const [mchRepLetterLoading, setMchRepLetterLoading]       = useState(false)
+  const [mchRepLetterError, setMchRepLetterError]           = useState(null)
+  const [mchRepLetterCopied, setMchRepLetterCopied]         = useState(false)
 
   // ── Outcome tracking (60-day dispute log) ─────────────────────────────────
   const [outcomes, setOutcomes] = useState(() => {
@@ -810,6 +831,95 @@ Return ONLY valid JSON:
     finally { setPreArbLoading(false) }
   }
 
+  // ── Merchant dispute analyser ─────────────────────────────────────────────
+  const analyzeMerchant = async () => {
+    if (!complaint.trim()) { setMchError('Paste the chargeback notification or describe the dispute.'); return }
+    setMchLoading(true); setMchError(null); setMchResult(null); setMchRepLetter(null)
+    const tds = mchThreeDS === 'passed' ? 'Passed — liability shifts to issuer' : mchThreeDS === 'failed' ? 'Failed' : mchThreeDS === 'not_attempted' ? 'Not attempted' : 'Unknown'
+    const prompt = 'You are an expert chargeback representment specialist advising a merchant. Analyze this chargeback and build the best defence strategy.\n\n'
+      + 'CHARGEBACK DETAILS:\n- Reason Code: ' + (mchReasonCode || 'Not specified')
+      + '\n- Network: ' + (network === 'visa' ? 'Visa' : 'Mastercard')
+      + '\n- Amount: ' + (amount ? amount + ' ' + currency : 'Not specified')
+      + '\n- Merchant: ' + (merchant || 'Not specified')
+      + '\n- Order Date: ' + (mchOrderDate || 'Not specified')
+      + '\n- Order ID: ' + (mchOrderId || 'Not specified')
+      + '\n- Customer: ' + (mchCustomerEmail || 'Not specified')
+      + '\n- Delivery Confirmed: ' + mchDeliveryConfirmed
+      + '\n- 3DS: ' + tds
+      + '\n- Refund Policy Shown at Checkout: ' + mchRefundPolicyShown
+      + '\n- Prior Orders Same Customer: ' + (mchPriorOrders || 'Unknown')
+      + '\n- IP/Location Notes: ' + (mchIpLogs || 'None')
+      + '\n\nCHARGEBACK NOTIFICATION:\n"""' + complaint + '"""\n\n'
+      + 'Return ONLY valid JSON:\n{\n'
+      + '  "win_probability": "HIGH" | "MEDIUM" | "LOW",\n'
+      + '  "win_note": "2-sentence win/loss likelihood",\n'
+      + '  "rebuttal_strategy": "3-4 sentence representment strategy",\n'
+      + '  "key_arguments": ["Argument 1", "Argument 2", "Argument 3"],\n'
+      + '  "evidence_to_submit": [{"item": "Document", "priority": "required" | "strengthens", "note": "Why"}],\n'
+      + '  "weaknesses": ["Weakness 1"],\n'
+      + '  "deadline_note": "Representment deadline guidance",\n'
+      + '  "liability_shift": true | false,\n'
+      + '  "liability_shift_note": "One sentence or empty string"\n}'
+    try {
+      const res = await fetch('/api/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 1500, messages: [{ role: 'user', content: prompt }] }) })
+      if (!res.ok) throw new Error('API ' + res.status)
+      const data = await res.json()
+      const text = data.content.filter(b => b.type === 'text').map(b => b.text).join('').replace(/```json|```/g, '').trim()
+      const parsed = JSON.parse(text)
+      setMchResult(parsed)
+      setOutcomes(prev => [{
+        id: 'MCH-' + Date.now().toString(36).toUpperCase().slice(-5),
+        date: new Date().toISOString(),
+        merchant: merchant || '—',
+        amount: amount ? amount + ' ' + currency : '—',
+        network: network === 'visa' ? 'VISA' : 'MC',
+        reasonCode: mchReasonCode || '—',
+        reasonTitle: 'Merchant chargeback',
+        status: 'pending',
+        resolvedDate: null,
+        mode: 'merchant',
+      }, ...prev])
+    } catch (e) { setMchError('Analysis failed: ' + e.message) }
+    finally { setMchLoading(false) }
+  }
+
+  const generateRepLetter = async () => {
+    if (!mchResult) return
+    setMchRepLetterLoading(true); setMchRepLetterError(null); setMchRepLetter(null)
+    const prompt = 'You are a professional chargeback representment writer. Draft a formal representment letter for a merchant to submit to their acquirer.\n\n'
+      + 'CASE:\n- Reason Code: ' + (mchReasonCode || 'N/A') + ' (' + (network === 'visa' ? 'Visa' : 'Mastercard') + ')'
+      + '\n- Amount: ' + (amount ? amount + ' ' + currency : 'N/A')
+      + '\n- Merchant: ' + (merchant || 'N/A')
+      + '\n- Order ID: ' + (mchOrderId || 'N/A')
+      + '\n- Order Date: ' + (mchOrderDate || 'N/A')
+      + '\n- Delivery Confirmed: ' + mchDeliveryConfirmed
+      + '\n- 3DS: ' + mchThreeDS
+      + '\n- Strategy: ' + (mchResult.rebuttal_strategy || '')
+      + '\n- Key Arguments: ' + (mchResult.key_arguments || []).join('; ')
+      + '\n\nWrite a professional representment letter (300-450 words) from the merchant to their acquirer. '
+      + 'Opening: state purpose and chargeback reference. Body: make the case, cite evidence. Closing: state the request and contact. '
+      + 'Merchant speaks as "we". Return ONLY the letter text, no JSON or metadata.'
+    try {
+      const res = await fetch('/api/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 1000, messages: [{ role: 'user', content: prompt }] }) })
+      if (!res.ok) throw new Error('API ' + res.status)
+      const data = await res.json()
+      setMchRepLetter(data.content.filter(b => b.type === 'text').map(b => b.text).join('').trim())
+    } catch (e) { setMchRepLetterError('Letter failed: ' + e.message) }
+    finally { setMchRepLetterLoading(false) }
+  }
+
+  // ── CBR calculations (merchant mode) ──────────────────────────────────────
+  const cbrPct = (mchCbDisputes && mchCbTransactions && parseFloat(mchCbTransactions) > 0)
+    ? (parseFloat(mchCbDisputes) / parseFloat(mchCbTransactions)) * 100
+    : null
+  const cbrAmtNum     = parseFloat(mchCbAmount) || 0
+  const visaVdmpBreach = cbrPct !== null && cbrPct >= 0.9  && cbrAmtNum >= 75000
+  const visaVdmpWarn   = cbrPct !== null && cbrPct >= 0.65 && !visaVdmpBreach
+  const mcMdmpBreach   = cbrPct !== null && cbrPct >= 1.5  && cbrAmtNum >= 1000
+  const mcMdmpWarn     = cbrPct !== null && cbrPct >= 1.0  && !mcMdmpBreach
+
   // ── Outcome tracker helpers ────────────────────────────────────────────────
   const markCaseOutcome = (id, status) =>
     setOutcomes(prev => prev.map(o => o.id === id ? { ...o, status, resolvedDate: new Date().toISOString() } : o))
@@ -1050,6 +1160,13 @@ Return ONLY valid JSON:
           <p className="display-font text-stone-700 mt-4 max-w-2xl" style={{ fontSize: 'clamp(15px, 2vw, 17px)', lineHeight: '1.5' }}>
             An operational tool for translating customer complaints into compliant dispute summaries — with a built-in evidence package and merchant defense preview for every case.
           </p>
+          <div className="flex items-center mt-6" style={{ borderTop: '1px solid #D4CCBC', paddingTop: '20px' }}>
+            <button onClick={() => setPlatformMode('fi')} className={'mono-font text-xs tracking-widest px-5 py-2.5 border border-stone-900 transition-all ' + (platformMode === 'fi' ? 'bg-stone-900 text-stone-50' : 'bg-transparent text-stone-600 hover:bg-stone-100')}>ISSUER / FI MODE</button>
+            <button onClick={() => setPlatformMode('merchant')} className={'mono-font text-xs tracking-widest px-5 py-2.5 border-t border-b border-r border-stone-900 transition-all ' + (platformMode === 'merchant' ? 'bg-stone-900 text-stone-50' : 'bg-transparent text-stone-600 hover:bg-stone-100')}>MERCHANT MODE</button>
+            <span className={'mono-font text-[10px] tracking-wide ml-4 ' + (platformMode === 'merchant' ? 'text-amber-700' : 'text-stone-400')}>
+              {platformMode === 'fi' ? 'Issuing bank — review cardholder disputes, file chargebacks' : 'Merchant — fight chargebacks, build representment packages'}
+            </span>
+          </div>
         </div>
 
         {/* ── Triage handoff banner ── */}
@@ -1070,6 +1187,7 @@ Return ONLY valid JSON:
         )}
 
         {/* ── Steps 01 + 02 ── */}
+        {platformMode === 'fi' && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
 
 
@@ -1453,6 +1571,295 @@ Return ONLY valid JSON:
           </div>
         </div>
 
+        )}
+
+        {/* ── Steps 01 + 02 — Merchant Mode ── */}
+        {platformMode === 'merchant' && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
+
+          {/* ════ MERCHANT INTAKE FORM ════ */}
+          <div>
+            <div className="flex items-baseline gap-3 mb-6">
+              <span className="mono-font text-xs text-stone-500">01</span>
+              <h2 className="display-font font-semibold text-2xl text-stone-900" style={{ letterSpacing: '-0.01em' }}>Chargeback Intake</h2>
+            </div>
+            <div className="space-y-5">
+
+              <div>
+                <label className="input-label">Card Network</label>
+                <div className="flex gap-0">
+                  <button onClick={() => setNetwork('visa')} className={'network-btn ' + (network === 'visa' ? 'active' : 'inactive')}>VISA</button>
+                  <button onClick={() => setNetwork('mastercard')} className={'network-btn ' + (network === 'mastercard' ? 'active' : 'inactive')}>MASTERCARD</button>
+                </div>
+              </div>
+
+              <div>
+                <label className="input-label">Reason Code from Issuer <span className="mono-font text-[10px] text-stone-400 normal-case tracking-normal">(e.g. 10.4, 4853 — from your acquirer notification)</span></label>
+                <input type="text" value={mchReasonCode} onChange={e => setMchReasonCode(e.target.value)} placeholder="e.g. 13.1" className="input-field" />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="input-label">Merchant / Store Name</label>
+                  <input type="text" value={merchant} onChange={e => setMerchant(e.target.value)} placeholder="Your business name" className="input-field" />
+                </div>
+                <div>
+                  <label className="input-label">Chargeback Amount</label>
+                  <div className="flex gap-2">
+                    <input type="text" value={amount} onChange={e => setAmount(e.target.value)} placeholder="345.81" className="input-field" style={{ flex: 2 }} />
+                    <select value={currency} onChange={e => setCurrency(e.target.value)} className="input-field mono-font" style={{ flex: 1, fontSize: '13px' }}>
+                      <option>CAD</option><option>USD</option><option>EUR</option><option>GBP</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="input-label">Original Order Date</label>
+                  <input type="date" value={mchOrderDate} onChange={e => setMchOrderDate(e.target.value)} className="input-field mono-font" style={{ fontSize: '13px' }} />
+                </div>
+                <div>
+                  <label className="input-label">Chargeback Received Date</label>
+                  <input type="date" value={transactionDate} onChange={e => setTransactionDate(e.target.value)} className="input-field mono-font" style={{ fontSize: '13px' }} />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="input-label">Order ID / Reference</label>
+                  <input type="text" value={mchOrderId} onChange={e => setMchOrderId(e.target.value)} placeholder="ORD-2024-00183" className="input-field" />
+                </div>
+                <div>
+                  <label className="input-label">Customer Email / ID</label>
+                  <input type="text" value={mchCustomerEmail} onChange={e => setMchCustomerEmail(e.target.value)} placeholder="customer@email.com" className="input-field" />
+                </div>
+              </div>
+
+              <div>
+                <label className="input-label">Chargeback Notification / Customer Claim</label>
+                <textarea value={complaint} onChange={e => setComplaint(e.target.value)} placeholder="Paste the chargeback notification or describe the dispute..." rows={5} className="input-field" style={{ resize: 'vertical' }} />
+              </div>
+
+              <div>
+                <label className="input-label">Delivery / Service Confirmed</label>
+                <div className="flex gap-0 flex-wrap">
+                  {[{ id: 'yes', label: 'YES — CONFIRMED' }, { id: 'no', label: 'NO / UNCONFIRMED' }, { id: 'unknown', label: 'UNKNOWN' }].map(opt => (
+                    <button key={opt.id} onClick={() => setMchDeliveryConfirmed(opt.id)} className={'network-btn ' + (mchDeliveryConfirmed === opt.id ? 'active' : 'inactive')}>{opt.label}</button>
+                  ))}
+                </div>
+                {mchDeliveryConfirmed === 'yes' && <div className="mt-1.5 mono-font text-[10px] text-emerald-800 tracking-wide">Confirmed delivery strengthens 13.1 / 4855 defence — include tracking proof</div>}
+                {mchDeliveryConfirmed === 'no' && <div className="mt-1.5 mono-font text-[10px] text-amber-800 tracking-wide">Unconfirmed delivery weakens position — focus other arguments</div>}
+              </div>
+
+              <div>
+                <label className="input-label">3DS Authentication Result</label>
+                <div className="flex gap-0 flex-wrap">
+                  {[{ id: 'passed', label: 'PASSED' }, { id: 'failed', label: 'FAILED' }, { id: 'not_attempted', label: 'NOT ATTEMPTED' }, { id: 'unknown', label: 'UNKNOWN' }].map(opt => (
+                    <button key={opt.id} onClick={() => setMchThreeDS(opt.id)} className={'network-btn ' + (mchThreeDS === opt.id ? 'active' : 'inactive')}>{opt.label}</button>
+                  ))}
+                </div>
+                {mchThreeDS === 'passed' && <div className="mt-1.5 mono-font text-[10px] text-emerald-800 tracking-wide">Liability shifts to issuer — strong defence for 10.4 / 4837 fraud chargebacks</div>}
+                {mchThreeDS === 'not_attempted' && <div className="mt-1.5 mono-font text-[10px] text-amber-800 tracking-wide">No 3DS = no liability shift — harder to fight fraud-coded chargebacks</div>}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="input-label">Refund Policy Shown at Checkout</label>
+                  <div className="flex gap-0">
+                    {[{ id: 'yes', label: 'YES' }, { id: 'no', label: 'NO' }, { id: 'unknown', label: 'UNK' }].map(opt => (
+                      <button key={opt.id} onClick={() => setMchRefundPolicyShown(opt.id)} className={'network-btn ' + (mchRefundPolicyShown === opt.id ? 'active' : 'inactive')}>{opt.label}</button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <label className="input-label">Prior Orders (Same Customer)</label>
+                  <input type="number" value={mchPriorOrders} onChange={e => setMchPriorOrders(e.target.value)} placeholder="0" className="input-field mono-font" style={{ fontSize: '13px' }} />
+                </div>
+              </div>
+
+              <div>
+                <label className="input-label">IP / Location Notes <span className="mono-font text-[10px] text-stone-400 normal-case tracking-normal">(AVS match, IP vs billing, device fingerprint)</span></label>
+                <input type="text" value={mchIpLogs} onChange={e => setMchIpLogs(e.target.value)} placeholder="e.g. IP matches billing zip, AVS match, same device as prior orders" className="input-field" />
+              </div>
+
+              <div className="border border-stone-300 p-4 space-y-3" style={{ background: '#EEE9E0' }}>
+                <div className="mono-font text-[10px] tracking-widest text-stone-600">CBR MONITOR — THIS MONTH</div>
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <label className="input-label">DISPUTES</label>
+                    <input type="number" value={mchCbDisputes} onChange={e => setMchCbDisputes(e.target.value)} placeholder="12" className="input-field mono-font" style={{ fontSize: '13px' }} />
+                  </div>
+                  <div>
+                    <label className="input-label">TOTAL TXNS</label>
+                    <input type="number" value={mchCbTransactions} onChange={e => setMchCbTransactions(e.target.value)} placeholder="2400" className="input-field mono-font" style={{ fontSize: '13px' }} />
+                  </div>
+                  <div>
+                    <label className="input-label">DISPUTE VOL ($)</label>
+                    <input type="number" value={mchCbAmount} onChange={e => setMchCbAmount(e.target.value)} placeholder="8500" className="input-field mono-font" style={{ fontSize: '13px' }} />
+                  </div>
+                </div>
+                {cbrPct !== null && (
+                  <div className={'mono-font text-[10px] px-3 py-2 flex flex-wrap items-center gap-3 ' + (visaVdmpBreach || mcMdmpBreach ? 'bg-red-900 text-red-50' : visaVdmpWarn || mcMdmpWarn ? 'bg-amber-800 text-amber-50' : 'bg-emerald-900 text-emerald-50')}>
+                    <span className="font-bold">CBR: {cbrPct.toFixed(3)}%</span>
+                    {visaVdmpBreach && <span>VISA VDMP BREACH — {cbrPct.toFixed(2)}% above 0.90% threshold</span>}
+                    {!visaVdmpBreach && visaVdmpWarn && <span>Approaching VISA VDMP ({cbrPct.toFixed(2)}% — threshold 0.90%)</span>}
+                    {mcMdmpBreach && <span>MC MDMP BREACH — {cbrPct.toFixed(2)}% above 1.50% threshold</span>}
+                    {!mcMdmpBreach && mcMdmpWarn && <span>Approaching MC MDMP ({cbrPct.toFixed(2)}% — threshold 1.50%)</span>}
+                    {!visaVdmpBreach && !visaVdmpWarn && !mcMdmpBreach && !mcMdmpWarn && <span>Within network thresholds</span>}
+                  </div>
+                )}
+              </div>
+
+              <button onClick={analyzeMerchant} disabled={mchLoading || !complaint.trim()}
+                className="w-full bg-stone-900 text-stone-50 py-4 mono-font text-xs tracking-widest hover:bg-stone-800 disabled:bg-stone-400 transition-all flex items-center justify-center gap-3 group">
+                {mchLoading
+                  ? <><Loader2 className="w-4 h-4 animate-spin" /><span>ANALYZING CHARGEBACK</span></>
+                  : <><span>ANALYZE &amp; BUILD DEFENCE</span><ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" /></>}
+              </button>
+
+              {mchError && (
+                <div className="border border-red-700 bg-red-50 p-4 flex gap-3 items-start">
+                  <AlertCircle className="w-5 h-5 text-red-700 shrink-0 mt-0.5" />
+                  <div className="display-font text-sm text-red-900">{mchError}</div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* ════ MERCHANT ANALYSIS (02) ════ */}
+          <div>
+            <div className="flex items-baseline gap-3 mb-6">
+              <span className="mono-font text-xs text-stone-500">02</span>
+              <h2 className="display-font font-semibold text-2xl text-stone-900" style={{ letterSpacing: '-0.01em' }}>Defence Strategy</h2>
+            </div>
+            {!mchResult && !mchLoading && (
+              <div className="border border-dashed border-stone-400 p-12 text-center">
+                <Shield className="w-8 h-8 text-stone-400 mx-auto mb-3" />
+                <p className="display-font text-stone-500 italic">Defence strategy will appear after analysis.</p>
+              </div>
+            )}
+            {mchLoading && (
+              <div className="border border-stone-300 p-12 text-center bg-stone-50">
+                <Loader2 className="w-8 h-8 text-stone-700 mx-auto mb-3 animate-spin" />
+                <p className="display-font text-stone-700 italic">Building representment strategy…</p>
+              </div>
+            )}
+            {mchResult && (
+              <div className="space-y-6">
+                <div className="border-2 border-stone-900 bg-stone-50 p-6">
+                  <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                    <div className="mono-font text-xs tracking-widest text-stone-600">WIN PROBABILITY</div>
+                    <span className={'mono-font text-sm font-bold px-3 py-1 ' + (mchResult.win_probability === 'HIGH' ? 'bg-emerald-900 text-emerald-50' : mchResult.win_probability === 'MEDIUM' ? 'bg-amber-800 text-amber-50' : 'bg-red-900 text-red-50')}>
+                      {mchResult.win_probability}
+                    </span>
+                  </div>
+                  <p className="display-font text-stone-700 leading-relaxed text-[15px]">{mchResult.win_note}</p>
+                  {mchResult.liability_shift && (
+                    <div className="mt-3 pt-3 border-t border-stone-200">
+                      <div className="mono-font text-[10px] tracking-widest text-emerald-800 mb-1">LIABILITY SHIFT</div>
+                      <p className="display-font text-emerald-900 text-[14px]">{mchResult.liability_shift_note}</p>
+                    </div>
+                  )}
+                </div>
+                <div className="border border-stone-900 bg-white p-6">
+                  <div className="mono-font text-xs tracking-widest text-stone-600 mb-4">REPRESENTMENT STRATEGY</div>
+                  <p className="display-font text-stone-900 leading-relaxed text-[15px]" style={{ lineHeight: '1.7' }}>{mchResult.rebuttal_strategy}</p>
+                </div>
+                {mchResult.key_arguments && mchResult.key_arguments.length > 0 && (
+                  <div className="border-l-4 border-stone-900 bg-stone-50 p-5">
+                    <div className="mono-font text-xs tracking-widest text-stone-600 mb-3">KEY ARGUMENTS</div>
+                    <div className="space-y-2">
+                      {mchResult.key_arguments.map((arg, i) => (
+                        <div key={i} className="display-font text-stone-800 text-[14px] flex gap-2 leading-snug">
+                          <span className="mono-font text-[11px] text-stone-500 shrink-0 mt-0.5">{i+1}.</span>
+                          <span>{arg}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {mchResult.evidence_to_submit && mchResult.evidence_to_submit.length > 0 && (
+                  <div className="border border-stone-300 p-5" style={{ background: '#FAF7F1' }}>
+                    <div className="mono-font text-xs tracking-widest text-stone-600 mb-3">EVIDENCE TO SUBMIT</div>
+                    <div className="space-y-3">
+                      {mchResult.evidence_to_submit.map((ev, i) => (
+                        <div key={i} className="flex gap-2 items-start">
+                          <span className={'mono-font text-[9px] tracking-widest px-1.5 py-0.5 mt-0.5 shrink-0 ' + (ev.priority === 'required' ? 'bg-stone-900 text-stone-50' : 'bg-stone-300 text-stone-700')}>{(ev.priority || '').toUpperCase()}</span>
+                          <div>
+                            <div className="display-font text-stone-800 text-[14px] font-medium">{ev.item}</div>
+                            <div className="display-font text-stone-500 text-[12px] italic">{ev.note}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {mchResult.weaknesses && mchResult.weaknesses.length > 0 && (
+                  <div className="border-l-4 border-amber-700 bg-amber-50 p-5">
+                    <div className="mono-font text-xs tracking-widest text-amber-900 mb-2">WEAKNESSES TO ADDRESS</div>
+                    <div className="space-y-1.5">
+                      {mchResult.weaknesses.map((w, i) => (
+                        <div key={i} className="display-font text-stone-800 text-[14px] flex gap-2 leading-snug">
+                          <span className="text-amber-600 shrink-0 mt-0.5">→</span>
+                          <span>{w}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {mchResult.deadline_note && (
+                  <div className="mono-font text-[11px] text-amber-800 tracking-wide border border-amber-300 bg-amber-50 px-3 py-2">
+                    {mchResult.deadline_note}
+                  </div>
+                )}
+                {!mchRepLetter && !mchRepLetterLoading && (
+                  <button onClick={generateRepLetter}
+                    className="flex items-center gap-3 px-6 py-4 bg-stone-900 text-stone-50 mono-font text-xs tracking-widest hover:bg-stone-800 transition-all group w-full justify-center">
+                    <FileText className="w-4 h-4" />
+                    <span>GENERATE REPRESENTMENT LETTER</span>
+                    <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+                  </button>
+                )}
+                {mchRepLetterLoading && (
+                  <div className="border border-stone-300 p-8 bg-stone-50 flex items-center gap-3">
+                    <Loader2 className="w-5 h-5 text-stone-600 animate-spin shrink-0" />
+                    <p className="display-font text-stone-600 italic">Drafting representment letter…</p>
+                  </div>
+                )}
+                {mchRepLetterError && (
+                  <div className="border border-red-700 bg-red-50 p-4 flex gap-3 items-start">
+                    <AlertCircle className="w-4 h-4 text-red-700 shrink-0 mt-0.5" />
+                    <span className="display-font text-sm text-red-900">{mchRepLetterError}</span>
+                  </div>
+                )}
+                {mchRepLetter && (
+                  <div className="border border-stone-900">
+                    <div className="bg-stone-900 px-4 py-3 flex items-center justify-between">
+                      <div className="mono-font text-[10px] tracking-widest text-stone-400">REPRESENTMENT LETTER</div>
+                      <button onClick={() => { navigator.clipboard.writeText(mchRepLetter); setMchRepLetterCopied(true); setTimeout(() => setMchRepLetterCopied(false), 2000) }}
+                        className="mono-font text-[10px] flex items-center gap-1.5 text-stone-400 hover:text-stone-200 transition-colors">
+                        {mchRepLetterCopied ? <><Check className="w-3 h-3" /> COPIED</> : <><Copy className="w-3 h-3" /> COPY</>}
+                      </button>
+                    </div>
+                    <div className="bg-white p-5">
+                      {mchRepLetter.split('\n\n').map((para, i) => (
+                        <p key={i} className={'display-font text-stone-800 text-[14px] leading-relaxed ' + (i > 0 ? 'mt-3' : '')}>{para}</p>
+                      ))}
+                    </div>
+                    <div className="bg-stone-50 px-4 py-2 border-t border-stone-200">
+                      <button onClick={generateRepLetter} className="mono-font text-[10px] tracking-widest text-stone-500 hover:text-stone-800 transition-colors">↺ REGENERATE</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+        </div>
+        )}
+
+        {platformMode === 'fi' && (<>
         {/* ── Step 03 — Evidence Package ── */}
             <div className="section-divider" />
             <div>
@@ -1849,6 +2256,8 @@ Return ONLY valid JSON:
                 </div>
               )}
             </div>
+
+        </>)}
 
         {/* ── Section 07 — Dispute Outcome Tracker ── */}
         {visibleOutcomes.length > 0 && (
@@ -2383,6 +2792,72 @@ Return ONLY valid JSON:
                   )}
                 </div>
               )}
+            </div>
+          </>
+        )}
+
+        {platformMode === 'merchant' && cbrPct !== null && (
+          <>
+            <div className="section-divider" />
+            <div>
+              <div className="flex items-baseline gap-3 mb-2">
+                <span className="mono-font text-xs text-stone-500">08</span>
+                <h2 className="display-font font-semibold text-2xl text-stone-900" style={{ letterSpacing: '-0.01em' }}>Chargeback Ratio Monitor</h2>
+              </div>
+              <p className="display-font text-stone-500 text-[15px] mb-6 ml-7">Network monitoring program thresholds. Enter monthly dispute volume in Step 01 to track your exposure.</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                <div className={'border-2 p-5 ' + (visaVdmpBreach ? 'border-red-700 bg-red-50' : visaVdmpWarn ? 'border-amber-600 bg-amber-50' : 'border-stone-300 bg-stone-50')}>
+                  <div className="flex items-start justify-between mb-3">
+                    <div>
+                      <div className="mono-font text-xs tracking-widest text-stone-600 mb-1">VISA VDMP</div>
+                      <div className="display-font font-semibold text-stone-900">Visa Dispute Monitoring Programme</div>
+                    </div>
+                    <span className={'mono-font text-[10px] px-2 py-1 ' + (visaVdmpBreach ? 'bg-red-900 text-red-50' : visaVdmpWarn ? 'bg-amber-800 text-amber-50' : 'bg-emerald-900 text-emerald-50')}>
+                      {visaVdmpBreach ? 'BREACH' : visaVdmpWarn ? 'WARNING' : 'OK'}
+                    </span>
+                  </div>
+                  <div className="space-y-2 mb-4">
+                    <div className="flex items-center justify-between"><span className="mono-font text-[11px] text-stone-500">THRESHOLD</span><span className="mono-font text-[11px] text-stone-700">≥ 0.90% CBR AND ≥ $75,000</span></div>
+                    <div className="flex items-center justify-between"><span className="mono-font text-[11px] text-stone-500">YOUR CBR</span><span className={'mono-font text-sm font-bold ' + (visaVdmpBreach ? 'text-red-800' : visaVdmpWarn ? 'text-amber-800' : 'text-emerald-800')}>{cbrPct.toFixed(3)}%</span></div>
+                    <div className="flex items-center justify-between"><span className="mono-font text-[11px] text-stone-500">DISPUTE VOLUME</span><span className={'mono-font text-[11px] font-bold ' + (cbrAmtNum >= 75000 ? 'text-red-700' : 'text-stone-700')}>${cbrAmtNum.toLocaleString()}</span></div>
+                  </div>
+                  <div style={{ height: '6px', background: '#D4CCBC', borderRadius: '2px' }}>
+                    <div style={{ height: '100%', width: Math.min(cbrPct / 1.5 * 100, 100) + '%', background: visaVdmpBreach ? '#991b1b' : visaVdmpWarn ? '#92400e' : '#064e3b', borderRadius: '2px', transition: 'width 0.4s' }} />
+                  </div>
+                  <div className={'mt-3 display-font text-[13px] leading-snug ' + (visaVdmpBreach ? 'text-red-800' : visaVdmpWarn ? 'text-amber-800' : 'text-emerald-800')}>
+                    {visaVdmpBreach ? 'Breach. Expect fines from $50/month escalating to $25,000/month. MID termination risk after 12 months.' : visaVdmpWarn ? 'Approaching VDMP. If dispute volume also reaches $75k you will be enrolled. Review top dispute codes now.' : 'Within Visa VDMP thresholds. Next threshold: 0.90% CBR + $75k volume.'}
+                  </div>
+                </div>
+                <div className={'border-2 p-5 ' + (mcMdmpBreach ? 'border-red-700 bg-red-50' : mcMdmpWarn ? 'border-amber-600 bg-amber-50' : 'border-stone-300 bg-stone-50')}>
+                  <div className="flex items-start justify-between mb-3">
+                    <div>
+                      <div className="mono-font text-xs tracking-widest text-stone-600 mb-1">MC MDMP</div>
+                      <div className="display-font font-semibold text-stone-900">Mastercard Dispute Monitoring Programme</div>
+                    </div>
+                    <span className={'mono-font text-[10px] px-2 py-1 ' + (mcMdmpBreach ? 'bg-red-900 text-red-50' : mcMdmpWarn ? 'bg-amber-800 text-amber-50' : 'bg-emerald-900 text-emerald-50')}>
+                      {mcMdmpBreach ? 'BREACH' : mcMdmpWarn ? 'WARNING' : 'OK'}
+                    </span>
+                  </div>
+                  <div className="space-y-2 mb-4">
+                    <div className="flex items-center justify-between"><span className="mono-font text-[11px] text-stone-500">THRESHOLD</span><span className="mono-font text-[11px] text-stone-700">≥ 1.50% CBR AND ≥ $1,000</span></div>
+                    <div className="flex items-center justify-between"><span className="mono-font text-[11px] text-stone-500">YOUR CBR</span><span className={'mono-font text-sm font-bold ' + (mcMdmpBreach ? 'text-red-800' : mcMdmpWarn ? 'text-amber-800' : 'text-emerald-800')}>{cbrPct.toFixed(3)}%</span></div>
+                    <div className="flex items-center justify-between"><span className="mono-font text-[11px] text-stone-500">DISPUTE VOLUME</span><span className={'mono-font text-[11px] font-bold ' + (cbrAmtNum >= 1000 ? 'text-stone-800' : 'text-stone-500')}>${cbrAmtNum.toLocaleString()}</span></div>
+                  </div>
+                  <div style={{ height: '6px', background: '#D4CCBC', borderRadius: '2px' }}>
+                    <div style={{ height: '100%', width: Math.min(cbrPct / 2.5 * 100, 100) + '%', background: mcMdmpBreach ? '#991b1b' : mcMdmpWarn ? '#92400e' : '#064e3b', borderRadius: '2px', transition: 'width 0.4s' }} />
+                  </div>
+                  <div className={'mt-3 display-font text-[13px] leading-snug ' + (mcMdmpBreach ? 'text-red-800' : mcMdmpWarn ? 'text-amber-800' : 'text-emerald-800')}>
+                    {mcMdmpBreach ? 'Breach. Fines start at $100/month. Termination risk after 3 months. Mastercard threshold is lower than Visa — hits SMBs faster.' : mcMdmpWarn ? 'Approaching MC MDMP. Remediate by reducing disputes or increasing transaction volume.' : 'Within Mastercard MDMP thresholds. Next: 1.50% CBR + $1,000 dispute volume.'}
+                  </div>
+                </div>
+              </div>
+              <div className="mt-4 border border-stone-200 p-4 bg-stone-50">
+                <div className="mono-font text-[10px] tracking-widest text-stone-400 mb-2">MONITORING PROGRAM PENALTIES</div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 display-font text-[13px] text-stone-600" style={{ lineHeight: '1.5' }}>
+                  <div><strong className="text-stone-800">Visa VDMP</strong> — $50/month (months 1–4), escalating to $25,000/month (month 10+). MID termination risk after 12 months without remediation.</div>
+                  <div><strong className="text-stone-800">MC MDMP</strong> — $100/month + $1,000 per dispute exceeding threshold (months 1–2), escalating from month 3. Termination review at month 3.</div>
+                </div>
+              </div>
             </div>
           </>
         )}
