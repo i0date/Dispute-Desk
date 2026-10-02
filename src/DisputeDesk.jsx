@@ -306,6 +306,50 @@ export default function DisputeDesk() {
   const updateSetting = (key, val) => setSettings(prev => ({ ...prev, [key]: val }))
   const resetSettings = () => { setSettings({ ...DEFAULT_SETTINGS }); try { localStorage.removeItem('dd_settings') } catch {} }
 
+  // ── Triage handoff — read from URL query params on mount ─────────────────
+  // localStorage cannot be used across Vercel domains (different origins)
+  const [triageHandoff, setTriageHandoff] = useState(null)
+  const [showHandoffBanner, setShowHandoffBanner] = useState(false)
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search)
+      const caseId = params.get('caseId')
+      if (!caseId) return   // not a triage handoff
+      const h = {
+        caseId:          caseId,
+        merchant:        params.get('merchant')        || '',
+        amount:          params.get('amount')          || '',
+        currency:        params.get('currency')        || 'CAD',
+        transactionDate: params.get('transactionDate') || '',
+        network:         params.get('network')         || '',
+        accountType:     params.get('accountType')     || '',
+        classification:  params.get('classification')  || '',
+        confidence:      params.get('confidence')      || '',
+        headline:        params.get('headline')        || '',
+        routing:         params.get('routing')         || '',
+        complaint:       params.get('complaint')       || '',
+      }
+      // Pre-fill intake fields
+      if (h.merchant)         setMerchant(h.merchant)
+      if (h.amount)           setAmount(h.amount)
+      if (h.currency)         setCurrency(h.currency)
+      if (h.transactionDate)  setTransactionDate(h.transactionDate)
+      if (h.complaint)        setComplaint(h.complaint)
+      // Map triage network → DisputeDesk network selector
+      if (h.network) {
+        const n = h.network.toLowerCase()
+        if (n.includes('mastercard') || n.includes('mc')) setNetwork('mastercard')
+        else if (n.includes('visa'))                       setNetwork('visa')
+      }
+      setTriageHandoff(h)
+      setShowHandoffBanner(true)
+      // Clean up URL without reloading (cosmetic)
+      window.history.replaceState({}, '', window.location.pathname)
+    } catch {}
+  }, [])
+
+  const dismissHandoffBanner = () => setShowHandoffBanner(false)
+
   const toggleCheck = (key) => setChecked(prev => ({ ...prev, [key]: !prev[key] }))
 
   const computeDaysSince = (dateStr) => {
@@ -919,6 +963,23 @@ Return ONLY valid JSON:
             An operational tool for translating customer complaints into compliant dispute summaries — with a built-in evidence package and merchant defense preview for every case.
           </p>
         </div>
+
+        {/* ── Triage handoff banner ── */}
+        {showHandoffBanner && triageHandoff && (
+          <div className="mb-6 flex items-start gap-3 px-4 py-3" style={{ background: '#ECFDF5', border: '1px solid #6EE7B7' }}>
+            <Shield className="w-4 h-4 shrink-0 mt-0.5" style={{ color: '#065F46' }} />
+            <div className="flex-1 min-w-0">
+              <span className="mono-font text-xs tracking-widest" style={{ color: '#064E3B' }}>PRE-FILLED FROM TRIAGE — </span>
+              <span className="mono-font text-xs" style={{ color: '#065F46' }}>
+                Case {triageHandoff.caseId} · {triageHandoff.classification?.replace(/_/g, ' ')} · {triageHandoff.confidence} confidence
+              </span>
+              {triageHandoff.headline && (
+                <div className="display-font italic text-sm mt-1" style={{ color: '#065F46' }}>"{triageHandoff.headline}"</div>
+              )}
+            </div>
+            <button onClick={dismissHandoffBanner} className="mono-font text-xs shrink-0" style={{ color: '#065F46' }}>✕</button>
+          </div>
+        )}
 
         {/* ── Steps 01 + 02 ── */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
