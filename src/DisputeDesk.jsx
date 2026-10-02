@@ -927,10 +927,6 @@ Return ONLY valid JSON:
   const mcMdmpBreach   = cbrPct !== null && cbrPct >= 1.5  && cbrAmtNum >= 1000
   const mcMdmpWarn     = cbrPct !== null && cbrPct >= 1.0  && !mcMdmpBreach
 
-  // Tracker — filtered by current platform mode
-  const trackerOutcomes = platformMode === 'merchant'
-    ? visibleOutcomes.filter(o => o.mode === 'merchant')
-    : visibleOutcomes.filter(o => o.mode !== 'merchant')
 
   // ── Outcome tracker helpers ────────────────────────────────────────────────
   const markCaseOutcome = (id, status) =>
@@ -1052,6 +1048,9 @@ Return ONLY valid JSON:
   const LIFECYCLE_IN_PROGRESS = new Set(['filed', 'representment', 'pre_arb'])
   const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000)
   const visibleOutcomes = outcomes.filter(o => new Date(o.date) > sixtyDaysAgo)
+  const trackerOutcomes = platformMode === 'merchant'
+    ? visibleOutcomes.filter(o => o.mode === 'merchant')
+    : visibleOutcomes.filter(o => o.mode !== 'merchant')
   const wonCount        = trackerOutcomes.filter(o => o.status === 'won').length
   const lostCount       = trackerOutcomes.filter(o => o.status === 'lost').length
   const withdrawnCount  = trackerOutcomes.filter(o => o.status === 'withdrawn').length
