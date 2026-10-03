@@ -34,46 +34,123 @@ const DEFAULT_SETTINGS = {
 
 // ─── DFA integration helpers ──────────────────────────────────────────────────
 
-// Estimate DFA funding grade from reason code + amount (no behavioral signals in tracker)
+// Estimate DFA funding grade using reason code, amount, and behavioral signals
+// signals: { threeDSStatus, deliveryConfirmed, liabilityShift, refundPolicyShown, priorOrders, winProb, confidence }
+
+// Base win-rate priors — full Visa + MC reason code coverage
 const DFA_BASE_WIN = {
-  "10.1": 0.85, "10.2": 0.48, "10.4": 0.76, "10.5": 0.93,
-  "13.1": 0.41, "13.3": 0.30, "13.5": 0.57, "13.6": 0.68, "13.7": 0.44,
-  "4837": 0.78, "4840": 0.72, "4849": 0.65, "4863": 0.73,
-  "4870": 0.87, "4871": 0.81,
-  "4841": 0.48, "4853": 0.33, "4855": 0.44, "4859": 0.46,
-  "4860": 0.70, "4854": 0.38,
+  // Visa Fraud (10.x)
+  '10.1': 0.85, '10.2': 0.48, '10.3': 0.72, '10.4': 0.76, '10.5': 0.93,
+  // Visa Authorization (11.x)
+  '11.1': 0.88, '11.2': 0.82, '11.3': 0.75,
+  // Visa Processing Errors (12.x)
+  '12.1': 0.80, '12.2': 0.85, '12.3': 0.82, '12.4': 0.79,
+  '12.5': 0.90, '12.6': 0.87, '12.6.1': 0.87, '12.6.2': 0.85, '12.7': 0.78,
+  // Visa Consumer Disputes (13.x)
+  '13.1': 0.41, '13.2': 0.55, '13.3': 0.30, '13.4': 0.35,
+  '13.5': 0.57, '13.6': 0.68, '13.7': 0.44, '13.8': 0.72, '13.9': 0.80,
+  // MC Fraud (48xx)
+  '4837': 0.78, '4840': 0.72, '4849': 0.65, '4863': 0.73, '4870': 0.87, '4871': 0.81,
+  // MC Authorization (48xx)
+  '4808': 0.83, '4812': 0.80, '4847': 0.77,
+  // MC Processing Errors (48xx)
+  '4831': 0.85, '4834': 0.88, '4835': 0.74, '4842': 0.80, '4846': 0.87,
+  // MC Consumer Disputes (48xx)
+  '4841': 0.48, '4850': 0.75, '4853': 0.33, '4854': 0.38,
+  '4855': 0.44, '4859': 0.46, '4860': 0.70, '4999': 0.72,
 }
-function estimateFundingGrade(reasonCode, amountStr) {
+
+// Reason code title lookup (for merchant tracker rows)
+const REASON_TITLES = {
+  '10.1':'EMV Counterfeit Fraud','10.2':'EMV Lost/Stolen Fraud','10.3':'Card-Present Fraud',
+  '10.4':'Card-Absent Fraud','10.5':'VFMP',
+  '11.1':'Card Recovery Bulletin','11.2':'Declined Authorization','11.3':'No Authorization',
+  '12.1':'Late Presentment','12.2':'Incorrect Txn Code','12.3':'Incorrect Currency',
+  '12.4':'Incorrect Account Number','12.5':'Incorrect Amount',
+  '12.6':'Duplicate / Paid by Other Means','12.6.1':'Duplicate Processing',
+  '12.6.2':'Paid by Other Means','12.7':'Invalid Data',
+  '13.1':'Merchandise Not Received','13.2':'Cancelled Recurring','13.3':'Not as Described',
+  '13.4':'Counterfeit Merchandise','13.5':'Misrepresentation','13.6':'Credit Not Processed',
+  '13.7':'Cancelled Merchandise','13.8':'Original Credit Not Accepted','13.9':'Non-Receipt of Cash',
+  '4837':'No Cardholder Authorization','4840':'Fraudulent Processing','4849':'Questionable Merchant',
+  '4863':'Cardholder Does Not Recognize','4870':'Chip Liability Shift','4871':'Chip/PIN Liability Shift',
+  '4808':'Authorization Chargeback','4812':'Account Not on File','4847':'Authorization Not Obtained',
+  '4831':'Transaction Amount Differs','4834':'Duplicate Processing','4835':'Card Not Valid',
+  '4842':'Late Presentment','4846':'Incorrect Currency',
+  '4841':'Cancelled Recurring/Digital Goods','4850':'Installment Billing Dispute',
+  '4853':'Defective/Not as Described','4854':'Cardholder Dispute','4855':'Goods Not Provided',
+  '4859':'Services Not Rendered','4860':'Credit Not Processed','4999':'Domestic Chargeback',
+}
+
+// Codes where delivery confirmation is a material signal
+const NON_RECEIPT_CODES = new Set(['13.1','4855','4859'])
+
+function estimateFundingGrade(reasonCode, amountStr, signals) {
+  signals = signals || {}
   if (!reasonCode || !amountStr) return null
   const code   = (reasonCode || '').split(/[\s–—]/)[0].trim()
   const amount = parseFloat(amountStr)
   if (isNaN(amount) || amount <= 0) return null
-  const p = DFA_BASE_WIN[code] ?? 0.50
+
+  // Base win rate from reason code priors
+  const baseWin = DFA_BASE_WIN[code] != null ? DFA_BASE_WIN[code] : 0.50
+
+  // Behavioral score — wired to actual stored signals
+  var behavScore = 0.65
+  const tds = signals.threeDSStatus || 'unknown'
+  if (tds === 'attempted_passed' || tds === 'passed') behavScore = 0.95
+  else if (tds === 'not_attempted')                    behavScore = 0.50
+  else if (tds === 'attempted_failed' || tds === 'failed') behavScore = 0.35
+  if (NON_RECEIPT_CODES.has(code)) {
+    if (signals.deliveryConfirmed === 'yes')     behavScore = Math.min(1, behavScore + 0.20)
+    else if (signals.deliveryConfirmed === 'no') behavScore = Math.max(0, behavScore - 0.20)
+  }
+  if (signals.liabilityShift === true)              behavScore = Math.min(1, behavScore + 0.15)
+  if (signals.refundPolicyShown === 'yes')           behavScore = Math.min(1, behavScore + 0.05)
+  if (signals.priorOrders && parseInt(signals.priorOrders) > 0) behavScore = Math.min(1, behavScore + 0.05)
+
+  // Amount score
   const amtScore = amount < 50 ? 0.15 : amount < 100 ? 0.40 : amount < 200 ? 0.65 : amount <= 2000 ? 1.00 : amount <= 5000 ? 0.85 : 0.70
-  const score = Math.round((p * 0.55 + 0.90 * 0.25 + amtScore * 0.20) * 100)
-  if (score >= 75) return { label: 'A', bg: 'bg-emerald-900', text: 'text-emerald-50' }
-  if (score >= 60) return { label: 'B', bg: 'bg-stone-700',   text: 'text-stone-50'  }
-  if (score >= 45) return { label: 'C', bg: 'bg-amber-800',   text: 'text-amber-50'  }
-  return              { label: 'D', bg: 'bg-red-900',     text: 'text-red-50'    }
+
+  // AI confidence / win probability
+  var docScore = 0.65
+  const wp = signals.winProb || signals.confidence
+  if (wp === 'HIGH' || wp === 'high') docScore = 0.92
+  else if (wp === 'LOW' || wp === 'low') docScore = 0.35
+
+  const score = Math.round((baseWin * 0.40 + behavScore * 0.30 + amtScore * 0.15 + docScore * 0.15) * 100)
+  if (score >= 75) return { label: 'A', bg: 'bg-emerald-900', text: 'text-emerald-50', score: score }
+  if (score >= 60) return { label: 'B', bg: 'bg-stone-700',   text: 'text-stone-50',  score: score }
+  if (score >= 45) return { label: 'C', bg: 'bg-amber-800',   text: 'text-amber-50',  score: score }
+  return              { label: 'D', bg: 'bg-red-900',     text: 'text-red-50',    score: score }
 }
 
-// Export pending tracker cases as DFA-ready CSV
+// Export pending tracker cases as DFA-ready CSV (signals from stored outcome data)
 function exportDFACSV(outcomes) {
   const pending = outcomes.filter(o => o.status === 'pending')
   if (!pending.length) { alert('No pending cases to export.'); return }
   const headers = ['id','code','amount','filed_days_ago','window_days','avs_mismatch','no_3ds','delivery_confirmed','merchant_acknowledged','pin_verified','vfmp_enrolled','strong_docs','merchant_cbr','prior_claims','note']
   const rows = pending.map(o => {
-    const code   = (o.reasonCode || '').split(/[\s–—]/)[0].trim()
-    const amount = parseFloat(o.amount) || 0
-    const note   = `"DisputeDesk export — ${o.merchant || ''} — ${o.amount || ''}. ${(o.notes || '').replace(/"/g,"'")}"`
-    return [o.id, code, amount, 0, 120, 'no','no','no','no','no','no','no', '0.8', 0, note].join(',')
+    const code     = (o.reasonCode || '').split(/[\s–—]/)[0].trim()
+    const amount   = parseFloat((o.amount || '').replace(/[^0-9.]/g, '')) || 0
+    const tds      = o.threeDSStatus || 'unknown'
+    const no3ds    = (tds === 'not_attempted') ? 'yes' : (tds === 'attempted_passed' || tds === 'passed') ? 'no' : 'unknown'
+    const delivery = o.deliveryConfirmed === 'yes' ? 'yes' : o.deliveryConfirmed === 'no' ? 'no' : 'unknown'
+    const vfmp     = code === '10.5' ? 'yes' : 'no'
+    const pin      = (tds === 'attempted_passed' || tds === 'passed') ? 'yes' : 'no'
+    const docs     = o.winProb === 'HIGH' || o.confidence === 'high' ? 'yes' : o.winProb === 'LOW' || o.confidence === 'low' ? 'no' : 'partial'
+    const prior    = o.priorOrders ? parseInt(o.priorOrders) || 0 : 0
+    const daysFiled = o.date ? Math.round((new Date() - new Date(o.date)) / 86400000) : 0
+    const note     = '"DisputeDesk export — ' + (o.merchant || '') + ' — ' + (o.amount || '') + '. ' + (o.notes || '').replace(/"/g, "'") + '"'
+    return [o.id, code, amount, daysFiled, 120, 'unknown', no3ds, delivery, o.deliveryConfirmed === 'yes' ? 'yes' : 'unknown', pin, vfmp, docs, '0.8', prior, note].join(',')
   })
   const blob = new Blob([[headers.join(','), ...rows].join('\n')], { type: 'text/csv' })
   const a = document.createElement('a')
   a.href = URL.createObjectURL(blob)
-  a.download = `disputedesk-to-dfa-${new Date().toISOString().split('T')[0]}.csv`
+  a.download = 'disputedesk-to-dfa-' + new Date().toISOString().split('T')[0] + '.csv'
   a.click()
 }
+
 
 // Calendar days until a date (negative = past)
 function daysUntil(date) {
@@ -572,17 +649,20 @@ Return ONLY a valid JSON object:
         .trim()
       const parsed = JSON.parse(text)
       setResult(parsed)
-      // Save to outcome log
+      // Save to outcome log with behavioral signals for DFA
       setOutcomes(prev => [{
-        id: `DD-${Date.now().toString(36).toUpperCase().slice(-5)}`,
+        id: 'DD-' + Date.now().toString(36).toUpperCase().slice(-5),
         date: new Date().toISOString(),
         merchant: merchant || '—',
-        amount: amount ? `${amount} ${currency}` : '—',
+        amount: amount ? amount + ' ' + currency : '—',
         network: network === 'visa' ? 'VISA' : 'MC',
         reasonCode: parsed.recommended_reason_code,
         reasonTitle: parsed.reason_code_title,
         status: 'pending',
         resolvedDate: null,
+        threeDSStatus: threeDSStatus,
+        confidence: parsed.confidence,
+        category: parsed.category,
       }, ...prev])
     } catch (e) {
       setError(`Analysis failed: ${e.message}`)
@@ -868,6 +948,7 @@ Return ONLY valid JSON:
       const text = data.content.filter(b => b.type === 'text').map(b => b.text).join('').replace(/```json|```/g, '').trim()
       const parsed = JSON.parse(text)
       setMchResult(parsed)
+      const mchCode = (mchReasonCode || '').split(/[\s–—]/)[0].trim()
       setOutcomes(prev => [{
         id: 'MCH-' + Date.now().toString(36).toUpperCase().slice(-5),
         date: new Date().toISOString(),
@@ -875,10 +956,16 @@ Return ONLY valid JSON:
         amount: amount ? amount + ' ' + currency : '—',
         network: network === 'visa' ? 'VISA' : 'MC',
         reasonCode: mchReasonCode || '—',
-        reasonTitle: 'Merchant chargeback',
+        reasonTitle: REASON_TITLES[mchCode] || (mchCode ? 'Chargeback — ' + mchCode : 'Merchant chargeback'),
         status: 'pending',
         resolvedDate: null,
         mode: 'merchant',
+        threeDSStatus: mchThreeDS,
+        deliveryConfirmed: mchDeliveryConfirmed,
+        refundPolicyShown: mchRefundPolicyShown,
+        priorOrders: mchPriorOrders,
+        liabilityShift: parsed.liability_shift || false,
+        winProb: parsed.win_probability,
       }, ...prev])
     } catch (e) { setMchError('Analysis failed: ' + e.message) }
     finally { setMchLoading(false) }
@@ -954,24 +1041,18 @@ Return ONLY valid JSON:
 
   const exportCSV = () => {
     const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000)
-    const rows = outcomes.filter(o => new Date(o.date) > sixtyDaysAgo)
-    const headers = ['Case ID', 'Date Opened', 'Merchant', 'Amount', 'Network', 'Reason Code', 'Status', 'Resolved Date', 'Prov Credit Date', '45BD Deadline']
+    const isMerchant = platformMode === 'merchant'
+    const rows = outcomes.filter(o => new Date(o.date) > sixtyDaysAgo && (isMerchant ? o.mode === 'merchant' : o.mode !== 'merchant'))
+    const headers = isMerchant
+      ? ['Case ID', 'Date Opened', 'Merchant', 'Amount', 'Network', 'Reason Code', 'Win Probability', 'Status', 'Resolved Date']
+      : ['Case ID', 'Date Opened', 'Merchant', 'Amount', 'Network', 'Reason Code', 'Status', 'Resolved Date', 'Prov Credit Date', '45BD Deadline']
     const csv = [
       headers.join(','),
       ...rows.map(o => {
         const pc45 = o.provCreditDate ? addBusinessDays(o.provCreditDate, 45) : null
-        return [
-          o.id,
-          new Date(o.date).toLocaleDateString('en-CA'),
-          `"${o.merchant}"`,
-          `"${o.amount}"`,
-          o.network,
-          `"${o.reasonCode} — ${o.reasonTitle}"`,
-          o.status,
-          o.resolvedDate ? new Date(o.resolvedDate).toLocaleDateString('en-CA') : '',
-          o.provCreditDate ? new Date(o.provCreditDate).toLocaleDateString('en-CA') : '',
-          pc45 ? pc45.toLocaleDateString('en-CA') : '',
-        ].join(',')
+        const base = [o.id, new Date(o.date).toLocaleDateString('en-CA'), '"' + (o.merchant||'') + '"', '"' + (o.amount||'') + '"', o.network, '"' + (o.reasonCode||'') + ' — ' + (o.reasonTitle||'') + '"']
+        if (isMerchant) return [...base, o.winProb || '', o.status, o.resolvedDate ? new Date(o.resolvedDate).toLocaleDateString('en-CA') : ''].join(',')
+        return [...base, o.status, o.resolvedDate ? new Date(o.resolvedDate).toLocaleDateString('en-CA') : '', o.provCreditDate ? new Date(o.provCreditDate).toLocaleDateString('en-CA') : '', pc45 ? pc45.toLocaleDateString('en-CA') : ''].join(',')
       })
     ].join('\n')
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
@@ -992,11 +1073,13 @@ Return ONLY valid JSON:
 
   // ── Reg E provisional credit deadline (10 BD from when dispute is received) ──
   // Used when cardType === 'debit' and an analysis has been run
+  // Reg E deadlines run from date dispute received (transactionDate as proxy if not separately captured)
+  const regEBaseDate = transactionDate || new Date().toISOString()
   const regEPcDue = (cardType === 'debit' && result)
-    ? addBusinessDays(new Date().toISOString(), 10).toLocaleDateString('en-CA')
+    ? addBusinessDays(regEBaseDate, 10).toLocaleDateString('en-CA')
     : null
   const regEInvDue = (cardType === 'debit' && result)
-    ? addBusinessDays(new Date().toISOString(), 45).toLocaleDateString('en-CA')
+    ? addBusinessDays(regEBaseDate, 45).toLocaleDateString('en-CA')
     : null
 
   const isFraud     = result?.category === 'fraud' || result?.category === 'mc_fraud'
@@ -1097,7 +1180,7 @@ Return ONLY valid JSON:
     const times = trackerOutcomes.filter(o => o.resolvedDate && o.date).map(o => Math.round((new Date(o.resolvedDate) - new Date(o.date)) / (1000 * 60 * 60 * 24)))
     const avgDays = times.length > 0 ? Math.round(times.reduce((s, t) => s + t, 0) / times.length) : null
     return { byNetwork, topCodes, weeks, avgDays, resolvedCount: resolved.length }
-  }, [trackerOutcomes])
+  }, [outcomes, platformMode])
 
   const impactStyle = (impact) => {
     if (impact === 'required')    return 'text-stone-900'
@@ -2562,7 +2645,7 @@ Return ONLY valid JSON:
                                 </div>
                                 {/* DFA grade badge */}
                                 {(() => {
-                                  const dfaG = estimateFundingGrade(o.reasonCode, o.amount)
+                                  const dfaG = estimateFundingGrade(o.reasonCode, o.amount, { threeDSStatus: o.threeDSStatus, deliveryConfirmed: o.deliveryConfirmed, liabilityShift: o.liabilityShift, refundPolicyShown: o.refundPolicyShown, priorOrders: o.priorOrders, winProb: o.winProb, confidence: o.confidence })
                                   return dfaG
                                     ? <span className={`mono-font text-[10px] font-bold px-1.5 py-0.5 ${dfaG.bg} ${dfaG.text} justify-self-start`} title={`Estimated DFA funding grade — ${dfaG.label} based on reason code and amount. Open DFA for full underwriting.`}>{dfaG.label}</span>
                                     : <span className="text-stone-300 mono-font text-[10px]">—</span>
