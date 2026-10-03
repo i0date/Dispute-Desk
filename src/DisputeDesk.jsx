@@ -2606,13 +2606,23 @@ Return ONLY valid JSON:
                                       onChange={e => markCaseOutcome(o.id, e.target.value)}
                                       style={{ fontSize: '13px', padding: '8px 10px' }}
                                     >
-                                      <option value="pending">Pending — not yet filed</option>
-                                      <option value="filed">Filed — submitted to network</option>
-                                      <option value="representment">Representment received — merchant responded</option>
-                                      <option value="pre_arb">Pre-arb filed — awaiting decision</option>
-                                      <option value="won">Won</option>
-                                      <option value="lost">Lost</option>
-                                      <option value="withdrawn">Withdrawn</option>
+                                      {o.mode === 'merchant' ? (<>
+                                        <option value="pending">Chargeback received — preparing representment</option>
+                                        <option value="filed">Representment filed — awaiting acquirer decision</option>
+                                        <option value="representment">Acquirer responded — under review</option>
+                                        <option value="pre_arb">Pre-arb filed</option>
+                                        <option value="won">Won — chargeback reversed</option>
+                                        <option value="lost">Lost — chargeback upheld</option>
+                                        <option value="withdrawn">Withdrawn</option>
+                                      </>) : (<>
+                                        <option value="pending">Pending — not yet filed</option>
+                                        <option value="filed">Filed — submitted to network</option>
+                                        <option value="representment">Representment received — merchant responded</option>
+                                        <option value="pre_arb">Pre-arb filed — awaiting decision</option>
+                                        <option value="won">Won</option>
+                                        <option value="lost">Lost</option>
+                                        <option value="withdrawn">Withdrawn</option>
+                                      </>)}
                                     </select>
                                   </div>
                                 </div>
@@ -2640,7 +2650,12 @@ Return ONLY valid JSON:
                                 <span className="display-font text-sm text-stone-700 truncate pr-2">{o.merchant}</span>
                                 <span className="mono-font text-xs text-stone-600">{o.amount}</span>
                                 <div className="pr-2">
-                                  <span className="mono-font text-xs text-stone-600">{o.reasonCode}</span>
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span className="mono-font text-xs text-stone-600">{o.reasonCode}</span>
+                                    {o.mode === 'merchant' && o.winProb && (
+                                      <span className={'mono-font text-[8px] tracking-widest px-1.5 py-0.5 ' + (o.winProb === 'HIGH' ? 'bg-emerald-900 text-emerald-50' : o.winProb === 'LOW' ? 'bg-red-900 text-red-50' : 'bg-amber-800 text-amber-50')}>{o.winProb}</span>
+                                    )}
+                                  </div>
                                   {o.notes && <p className="display-font text-[11px] text-stone-400 truncate mt-0.5 italic">{o.notes}</p>}
                                 </div>
                                 {/* DFA grade badge */}
@@ -2654,7 +2669,7 @@ Return ONLY valid JSON:
                                   {/* ── Lifecycle stage buttons ───────────────── */}
                                   {o.status === 'pending' && (
                                     <>
-                                      <button onClick={() => advanceStage(o.id, 'filed')} title="Mark as filed with network" className="mono-font text-[10px] px-1.5 py-0.5 border border-stone-600 text-stone-600 hover:bg-stone-100 transition-colors">FILED</button>
+                                      <button onClick={() => advanceStage(o.id, 'filed')} title={o.mode === 'merchant' ? 'File representment with acquirer' : 'Mark as filed with network'} className="mono-font text-[10px] px-1.5 py-0.5 border border-stone-600 text-stone-600 hover:bg-stone-100 transition-colors">{o.mode === 'merchant' ? 'SEND REPMT' : 'FILED'}</button>
                                       <button onClick={() => markCaseOutcome(o.id, 'won')} className="mono-font text-[10px] px-1.5 py-0.5 border border-emerald-700 text-emerald-700 hover:bg-emerald-50 transition-colors">WON</button>
                                       <button onClick={() => markCaseOutcome(o.id, 'lost')} className="mono-font text-[10px] px-1.5 py-0.5 border border-red-700 text-red-700 hover:bg-red-50 transition-colors">LOST</button>
                                       <button onClick={() => markCaseOutcome(o.id, 'withdrawn')} className="mono-font text-[10px] px-1.5 py-0.5 border border-stone-400 text-stone-500 hover:bg-stone-100 transition-colors">WD</button>
@@ -2662,8 +2677,8 @@ Return ONLY valid JSON:
                                   )}
                                   {o.status === 'filed' && (
                                     <>
-                                      <span className="mono-font text-[10px] px-1.5 py-0.5 bg-stone-700 text-stone-50">FILED</span>
-                                      <button onClick={() => advanceStage(o.id, 'representment')} title="Merchant representment received" className="mono-font text-[10px] px-1.5 py-0.5 border border-amber-700 text-amber-700 hover:bg-amber-50 transition-colors">REPMT</button>
+                                      <span className="mono-font text-[10px] px-1.5 py-0.5 bg-stone-700 text-stone-50">{o.mode === 'merchant' ? 'REPMT FILED' : 'FILED'}</span>
+                                      <button onClick={() => advanceStage(o.id, 'representment')} title={o.mode === 'merchant' ? 'Acquirer responded to representment' : 'Merchant representment received'} className="mono-font text-[10px] px-1.5 py-0.5 border border-amber-700 text-amber-700 hover:bg-amber-50 transition-colors">{o.mode === 'merchant' ? 'ACQ RESP' : 'REPMT'}</button>
                                       <button onClick={() => markCaseOutcome(o.id, 'won')} className="mono-font text-[10px] px-1.5 py-0.5 border border-emerald-700 text-emerald-700 hover:bg-emerald-50 transition-colors">WON</button>
                                       <button onClick={() => markCaseOutcome(o.id, 'lost')} className="mono-font text-[10px] px-1.5 py-0.5 border border-red-700 text-red-700 hover:bg-red-50 transition-colors">LOST</button>
                                       <button onClick={() => revertCase(o.id)} className="mono-font text-[10px] text-stone-400 hover:text-stone-700 transition-colors px-1" title="Revert">↩</button>
@@ -2671,7 +2686,7 @@ Return ONLY valid JSON:
                                   )}
                                   {o.status === 'representment' && (
                                     <>
-                                      <span className="mono-font text-[10px] px-1.5 py-0.5 bg-amber-800 text-amber-50">REPMT RCV'D</span>
+                                      <span className="mono-font text-[10px] px-1.5 py-0.5 bg-amber-800 text-amber-50">{o.mode === 'merchant' ? 'ACQ RESPONDED' : "REPMT RCV'D"}</span>
                                       <button onClick={() => {
                                         const amtNum = parseFloat((o.amount || '').replace(/[^0-9.]/g, ''))
                                         const arbFee = (o.network || '').toLowerCase().includes('visa') ? 500 : 200
