@@ -1043,23 +1043,28 @@ Return ONLY valid JSON:
     const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000)
     const isMerchant = platformMode === 'merchant'
     const rows = outcomes.filter(o => new Date(o.date) > sixtyDaysAgo && (isMerchant ? o.mode === 'merchant' : o.mode !== 'merchant'))
-    const headers = isMerchant
-      ? ['Case ID', 'Date Opened', 'Merchant', 'Amount', 'Network', 'Reason Code', 'Win Probability', 'Status', 'Resolved Date']
-      : ['Case ID', 'Date Opened', 'Merchant', 'Amount', 'Network', 'Reason Code', 'Status', 'Resolved Date', 'Prov Credit Date', '45BD Deadline']
+    // Export DFA-compatible schema so this CSV can be uploaded directly to DisputeFundingAssessor
+    const headers = ['id','code','amount','filed_days_ago','window_days','avs_mismatch','no_3ds','delivery_confirmed','merchant_acknowledged','pin_verified','vfmp_enrolled','strong_docs','merchant_cbr','prior_claims','note','status','resolved_date']
     const csv = [
       headers.join(','),
       ...rows.map(o => {
-        const pc45 = o.provCreditDate ? addBusinessDays(o.provCreditDate, 45) : null
-        const base = [o.id, new Date(o.date).toLocaleDateString('en-CA'), '"' + (o.merchant||'') + '"', '"' + (o.amount||'') + '"', o.network, '"' + (o.reasonCode||'') + ' — ' + (o.reasonTitle||'') + '"']
-        if (isMerchant) return [...base, o.winProb || '', o.status, o.resolvedDate ? new Date(o.resolvedDate).toLocaleDateString('en-CA') : ''].join(',')
-        return [...base, o.status, o.resolvedDate ? new Date(o.resolvedDate).toLocaleDateString('en-CA') : '', o.provCreditDate ? new Date(o.provCreditDate).toLocaleDateString('en-CA') : '', pc45 ? pc45.toLocaleDateString('en-CA') : ''].join(',')
+        const filedDaysAgo = o.date ? Math.round((Date.now() - new Date(o.date).getTime()) / 86400000) : ''
+        const no3ds = o.threeDSStatus === 'none' ? 'yes' : o.threeDSStatus ? 'no' : ''
+        const strongDocs = o.confidence === 'HIGH' ? 'yes' : o.confidence === 'LOW' ? 'no' : (o.refundPolicyShown ? 'yes' : '')
+        const deliveryConf = o.deliveryConfirmed ? 'yes' : isMerchant ? 'no' : ''
+        const priorClaims = o.priorOrders || '0'
+        const note = isMerchant
+          ? ('"' + (o.merchant || '') + (o.winProb ? ' — AI: ' + o.winProb : '') + '"')
+          : ('"' + (o.merchant || '') + (o.category ? ' — ' + o.category : '') + '"')
+        const amt = (o.amount || '').replace(/[^0-9.]/g, '')
+        return [o.id, o.reasonCode || '', amt, filedDaysAgo, 120, '', no3ds, deliveryConf, '', '', '', strongDocs, '', priorClaims, note, o.status, o.resolvedDate ? new Date(o.resolvedDate).toLocaleDateString('en-CA') : ''].join(',')
       })
     ].join('\n')
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `dispute-desk-${new Date().toISOString().split('T')[0]}.csv`
+    a.download = (isMerchant ? 'dd-merchant-' : 'dd-fi-') + new Date().toISOString().split('T')[0] + '.csv'
     a.click()
     URL.revokeObjectURL(url)
   }
@@ -2343,7 +2348,7 @@ Return ONLY valid JSON:
                 </div>
               </div>
               <p className="display-font text-stone-500 text-[15px] mb-4 ml-7" style={{ lineHeight: '1.5' }}>
-                Mark outcomes as cases resolve. Track provisional credit deadlines. Export to CSV for reporting.
+                {platformMode === 'merchant' ? 'Track representment outcomes. Monitor chargeback rate. Export to DFA for funding analysis.' : 'Mark outcomes as cases resolve. Track provisional credit deadlines. Export to DFA for funding analysis.'}
               </p>
 
               {/* ── Compliance thresholds panel ── */}
@@ -2658,13 +2663,13 @@ Return ONLY valid JSON:
                                   </div>
                                   {o.notes && <p className="display-font text-[11px] text-stone-400 truncate mt-0.5 italic">{o.notes}</p>}
                                 </div>
-                                {/* DFA grade badge */}
-                                {(() => {
+                                {/* DFA grade badge — FI only; merchant rows show winProb badge in reason cell */}
+                                {o.mode !== 'merchant' ? (() => {
                                   const dfaG = estimateFundingGrade(o.reasonCode, o.amount, { threeDSStatus: o.threeDSStatus, deliveryConfirmed: o.deliveryConfirmed, liabilityShift: o.liabilityShift, refundPolicyShown: o.refundPolicyShown, priorOrders: o.priorOrders, winProb: o.winProb, confidence: o.confidence })
                                   return dfaG
                                     ? <span className={`mono-font text-[10px] font-bold px-1.5 py-0.5 ${dfaG.bg} ${dfaG.text} justify-self-start`} title={`Estimated DFA funding grade — ${dfaG.label} based on reason code and amount. Open DFA for full underwriting.`}>{dfaG.label}</span>
                                     : <span className="text-stone-300 mono-font text-[10px]">—</span>
-                                })()}
+                                })() : <span className="text-stone-300 mono-font text-[10px]">—</span>}
                                 <div className="flex gap-1 flex-wrap items-center">
                                   {/* ── Lifecycle stage buttons ───────────────── */}
                                   {o.status === 'pending' && (
@@ -2695,7 +2700,7 @@ Return ONLY valid JSON:
                                         }
                                         advanceStage(o.id, 'pre_arb')
                                       }} title="File pre-arbitration" className="mono-font text-[10px] px-1.5 py-0.5 border border-purple-700 text-purple-700 hover:bg-purple-50 transition-colors">PRE-ARB</button>
-                                      <button onClick={() => generatePreArbDraft(o)} className="mono-font text-[10px] px-1.5 py-0.5 border border-stone-600 text-stone-600 hover:bg-stone-50 transition-colors">DRAFT PRE-ARB</button>
+                                      {o.mode !== 'merchant' && <button onClick={() => generatePreArbDraft(o)} className="mono-font text-[10px] px-1.5 py-0.5 border border-stone-600 text-stone-600 hover:bg-stone-50 transition-colors">DRAFT PRE-ARB</button>}
                                       <button onClick={() => markCaseOutcome(o.id, 'won')} className="mono-font text-[10px] px-1.5 py-0.5 border border-emerald-700 text-emerald-700 hover:bg-emerald-50 transition-colors">WON</button>
                                       <button onClick={() => markCaseOutcome(o.id, 'lost')} className="mono-font text-[10px] px-1.5 py-0.5 border border-red-700 text-red-700 hover:bg-red-50 transition-colors">LOST</button>
                                       <button onClick={() => revertCase(o.id)} className="mono-font text-[10px] text-stone-400 hover:text-stone-700 transition-colors px-1" title="Revert">↩</button>
@@ -2704,7 +2709,7 @@ Return ONLY valid JSON:
                                   {o.status === 'pre_arb' && (
                                     <>
                                       <span className="mono-font text-[10px] px-1.5 py-0.5 bg-purple-900 text-purple-50">PRE-ARB FILED</span>
-                                      <button onClick={() => generatePreArbDraft(o)} className="mono-font text-[10px] px-1.5 py-0.5 border border-stone-600 text-stone-600 hover:bg-stone-50 transition-colors">DRAFT PRE-ARB</button>
+                                      {o.mode !== 'merchant' && <button onClick={() => generatePreArbDraft(o)} className="mono-font text-[10px] px-1.5 py-0.5 border border-stone-600 text-stone-600 hover:bg-stone-50 transition-colors">DRAFT PRE-ARB</button>}
                                       <button onClick={() => markCaseOutcome(o.id, 'won')} className="mono-font text-[10px] px-1.5 py-0.5 border border-emerald-700 text-emerald-700 hover:bg-emerald-50 transition-colors">WON</button>
                                       <button onClick={() => markCaseOutcome(o.id, 'lost')} className="mono-font text-[10px] px-1.5 py-0.5 border border-red-700 text-red-700 hover:bg-red-50 transition-colors">LOST</button>
                                       <button onClick={() => revertCase(o.id)} className="mono-font text-[10px] text-stone-400 hover:text-stone-700 transition-colors px-1" title="Revert">↩</button>
