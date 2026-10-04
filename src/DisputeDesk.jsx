@@ -1264,9 +1264,6 @@ Return ONLY valid JSON:
           <div className="flex items-center mt-6" style={{ borderTop: '1px solid #D4CCBC', paddingTop: '20px' }}>
             <button onClick={() => setPlatformMode('fi')} className={'mono-font text-xs tracking-widest px-5 py-2.5 border border-stone-900 transition-all ' + (platformMode === 'fi' ? 'bg-stone-900 text-stone-50' : 'bg-transparent text-stone-600 hover:bg-stone-100')}>ISSUER / FI MODE</button>
             <button onClick={() => setPlatformMode('merchant')} className={'mono-font text-xs tracking-widest px-5 py-2.5 border-t border-b border-r border-stone-900 transition-all ' + (platformMode === 'merchant' ? 'bg-stone-900 text-stone-50' : 'bg-transparent text-stone-600 hover:bg-stone-100')}>MERCHANT MODE</button>
-            <span className={'mono-font text-[10px] tracking-wide ml-4 ' + (platformMode === 'merchant' ? 'text-amber-700' : 'text-stone-400')}>
-              {platformMode === 'fi' ? 'Issuing bank — review cardholder disputes, file chargebacks' : 'Merchant — fight chargebacks, build representment packages'}
-            </span>
           </div>
         </div>
 
@@ -2347,9 +2344,6 @@ Return ONLY valid JSON:
                   </button>
                 </div>
               </div>
-              <p className="display-font text-stone-500 text-[15px] mb-4 ml-7" style={{ lineHeight: '1.5' }}>
-                {platformMode === 'merchant' ? 'Track representment outcomes. Monitor chargeback rate. Export to DFA for funding analysis.' : 'Mark outcomes as cases resolve. Track provisional credit deadlines. Export to DFA for funding analysis.'}
-              </p>
 
               {/* ── Compliance thresholds panel ── */}
               {showSettings && (
@@ -2692,14 +2686,14 @@ Return ONLY valid JSON:
                                   {o.status === 'representment' && (
                                     <>
                                       <span className="mono-font text-[10px] px-1.5 py-0.5 bg-amber-800 text-amber-50">{o.mode === 'merchant' ? 'ACQ RESPONDED' : "REPMT RCV'D"}</span>
-                                      <button onClick={() => {
+                                      {o.mode !== 'merchant' && <button onClick={() => {
                                         const amtNum = parseFloat((o.amount || '').replace(/[^0-9.]/g, ''))
                                         const arbFee = (o.network || '').toLowerCase().includes('visa') ? 500 : 200
                                         if (!isNaN(amtNum) && amtNum < arbFee) {
                                           if (!window.confirm('⚠ Arb fee warning: dispute amount (' + (o.amount || '?') + ') is less than the ' + (o.network || 'network') + ' arbitration fee (~$' + arbFee + '). Escalating to pre-arb will cost more than the dispute value. Proceed anyway?')) return
                                         }
                                         advanceStage(o.id, 'pre_arb')
-                                      }} title="File pre-arbitration" className="mono-font text-[10px] px-1.5 py-0.5 border border-purple-700 text-purple-700 hover:bg-purple-50 transition-colors">PRE-ARB</button>
+                                      }} title="File pre-arbitration" className="mono-font text-[10px] px-1.5 py-0.5 border border-purple-700 text-purple-700 hover:bg-purple-50 transition-colors">PRE-ARB</button>}
                                       {o.mode !== 'merchant' && <button onClick={() => generatePreArbDraft(o)} className="mono-font text-[10px] px-1.5 py-0.5 border border-stone-600 text-stone-600 hover:bg-stone-50 transition-colors">DRAFT PRE-ARB</button>}
                                       <button onClick={() => markCaseOutcome(o.id, 'won')} className="mono-font text-[10px] px-1.5 py-0.5 border border-emerald-700 text-emerald-700 hover:bg-emerald-50 transition-colors">WON</button>
                                       <button onClick={() => markCaseOutcome(o.id, 'lost')} className="mono-font text-[10px] px-1.5 py-0.5 border border-red-700 text-red-700 hover:bg-red-50 transition-colors">LOST</button>
@@ -2900,7 +2894,6 @@ Return ONLY valid JSON:
                   <div>
                     <label className="input-label">DISPUTES THIS MONTH</label>
                     <input type="number" value={mchCbDisputes !== '' ? mchCbDisputes : String(autoMchCount)} onChange={e => setMchCbDisputes(e.target.value)} className="input-field mono-font" style={{ fontSize: '13px' }} />
-                    {mchCbDisputes === '' && autoMchCount > 0 && <div className="mono-font text-[9px] text-stone-400 mt-1">auto from tracker — edit to override</div>}
                   </div>
                   <div>
                     <label className="input-label">TOTAL TXNS THIS MONTH</label>
@@ -2910,7 +2903,6 @@ Return ONLY valid JSON:
                   <div>
                     <label className="input-label">DISPUTE VOLUME ($)</label>
                     <input type="number" value={mchCbAmount !== '' ? mchCbAmount : String(autoMchAmt)} onChange={e => setMchCbAmount(e.target.value)} className="input-field mono-font" style={{ fontSize: '13px' }} />
-                    {mchCbAmount === '' && autoMchAmt > 0 && <div className="mono-font text-[9px] text-stone-400 mt-1">auto from tracker — edit to override</div>}
                   </div>
                 </div>
                 {!mchCbTransactions && (
